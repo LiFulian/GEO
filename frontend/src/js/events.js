@@ -52,12 +52,9 @@ function bindEvents() {
   $("#backupFile").addEventListener("change", async event => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!confirm("导入备份会按 ID 覆盖同名数据，继续吗？")) return;
-    const payload = JSON.parse(await file.text());
-    const result = await api("/api/backup/import", { method: "POST", body: JSON.stringify(payload) });
-    toast(`备份已导入：产品 ${result.products}，GEO问题 ${result.geo_questions || 0}，文章 ${result.articles}，任务 ${result.tasks}`, "success");
+    toast("备份导入功能将在后续版本中重新支持", "error");
     event.target.value = "";
-    await load();
+    // TODO: 实现 PocketBase 版本的备份导入
   });
 
   // --- Products ---
@@ -84,15 +81,11 @@ function bindEvents() {
   $("#productAiPromptBtn").addEventListener("click", async () => {
     const rawText = $("#productAiInput").value.trim();
     if (!rawText) return toast("请先输入产品描述", "error");
-    const data = await api("/api/ai/product_profile_prompt", {
-      method: "POST",
-      body: JSON.stringify({
-        raw_text: rawText,
-        product_id: Number($("#productId").value || 0),
-      }),
-    });
-    $("#productAiResult").value = data.prompt;
-    await copyToClipboard(data.prompt);
+    const pid = Number($("#productId").value || 0);
+    const currentProduct = pid ? state.products.find(p => p.id === pid) : null;
+    const prompt = buildProductProfilePrompt(rawText, currentProduct);
+    $("#productAiResult").value = prompt;
+    await copyToClipboard(prompt);
     toast("产品档案 Prompt 已生成并复制", "success");
   });
 
@@ -104,16 +97,21 @@ function bindEvents() {
     setLoading(btn);
     toast("正在梳理产品档案...");
     try {
-      const data = await api("/api/ai/product_profile_direct", {
-        method: "POST",
-        body: JSON.stringify({
-          raw_text: rawText,
-          product_id: Number($("#productId").value || 0),
-        }),
-      });
-      $("#productAiResult").value = JSON.stringify(data.product, null, 2);
-      applyProductSuggestion(data.product);
+      const aiSettings = state.ai_settings || {};
+      if (!aiSettings.text_api_key) return toast("请先在「内容生成」中配置 AI Key", "error");
+      const pid = Number($("#productId").value || 0);
+      const currentProduct = pid ? state.products.find(p => p.id === pid) : null;
+      const prompt = buildProductProfilePrompt(rawText, currentProduct);
+      const result = await callAI(aiSettings, [
+        { role: "system", content: "你是一个严谨的中文内容运营专家，只输出可解析 JSON。" },
+        { role: "user", content: prompt },
+      ]);
+      const product = extractJsonObject(result);
+      $("#productAiResult").value = JSON.stringify(product, null, 2);
+      applyProductSuggestion(product);
       toast("已填入产品表单，请检查后保存", "success");
+    } catch (err) {
+      toast(err.message, "error");
     } finally {
       setLoading(btn, false);
     }
@@ -162,11 +160,11 @@ function bindEvents() {
   $("#buildGeoPromptBtn").addEventListener("click", async () => {
     const productId = Number($("#geoPromptProduct").value);
     if (!productId) return toast("请先创建并选择产品", "error");
-    const data = await api("/api/ai/geo_questions_prompt", {
-      method: "POST",
-      body: JSON.stringify({ product_id: productId, count: Number($("#geoPromptCount").value || 12) }),
-    });
-    $("#geoPromptBox").value = data.prompt;
+    const product = state.products.find(p => p.id === productId);
+    if (!product) return toast("未找到产品", "error");
+    const count = Number($("#geoPromptCount").value || 12);
+    const prompt = buildGeoQuestionPrompt(product, count);
+    $("#geoPromptBox").value = prompt;
     toast("GEO 问题 Prompt 已生成", "success");
   });
 
@@ -178,12 +176,34 @@ function bindEvents() {
   $("#importGeoQuestionsBtn").addEventListener("click", async () => {
     const productId = Number($("#geoPromptProduct").value);
     if (!productId) return toast("请先选择产品", "error");
-    const data = await api("/api/geo_questions/import", {
-      method: "POST",
-      body: JSON.stringify({ product_id: productId, raw: $("#geoImportBox").value }),
-    });
+    const raw = $("#geoImportBox").value;
+    if (!raw.trim()) return toast("请先粘贴 AI 返回的 JSON", "error");
+    let parsed, imported = 0, skipped = 0;
+    try {
+      parsed = extractJsonArray(raw);
+    } catch (err) {
+      return toast("JSON 格式错误：" + err.message, "error");
+    }
+    for (const item of parsed) {
+      const question = (item.question || item["问题"] || "").trim();
+      if (!question) { skipped++; continue; }
+      await geoApi("/api/geo_questions", {
+        method: "POST",
+        body: JSON.stringify({
+          product_id: productId,
+          question,
+          intent: item.intent || item["意图"] || "",
+          audience: item.audience || item["人群"] || "",
+          priority: item.priority || item["优先级"] || "medium",
+          status: "active",
+          content_angle: item.content_angle || item["内容角度"] || "",
+          target_platform: item.target_platform || item["目标平台"] || "",
+        }),
+      });
+      imported++;
+    }
     $("#geoImportBox").value = "";
-    toast(`已导入 ${data.geo_questions.length} 个 GEO 问题`, "success");
+    toast(`已导入 ${imported} 个 GEO 问题${skipped ? "，" + skipped + " 条跳过" : ""}`, "success");
     await load();
   });
 
@@ -191,16 +211,17 @@ function bindEvents() {
   $("#buildPromptBtn").addEventListener("click", async () => {
     const productId = Number($("#genProduct").value);
     if (!productId) return toast("请先创建并选择产品", "error");
-    const data = await api("/api/ai/prompt", {
-      method: "POST",
-      body: JSON.stringify({
-        product_id: productId,
-        count: Number($("#genCount").value || 10),
-        platform_ids: selectedValues("#genPlatforms"),
-        content_types: selectedTextValues("#contentTypes"),
-      }),
-    });
-    $("#promptBox").value = data.prompt;
+    const product = state.products.find(p => p.id === productId);
+    if (!product) return toast("未找到产品", "error");
+    const count = Number($("#genCount").value || 10);
+    const platformIds = selectedValues("#genPlatforms");
+    const platforms = platformIds.length
+      ? state.platforms.filter(p => platformIds.includes(p.id))
+      : state.platforms.filter(p => p.status === "enabled").slice(0, 12);
+    const contentTypes = selectedTextValues("#contentTypes");
+    const questions = state.geo_questions.filter(q => q.product_id === productId && q.status === "active");
+    const prompt = buildProductPrompt(product, platforms, count, contentTypes, questions);
+    $("#promptBox").value = prompt;
     toast("Prompt 已生成", "success");
   });
 
@@ -220,7 +241,14 @@ function bindEvents() {
     };
     if ($("#textKey").value) payload.text_api_key = $("#textKey").value;
     if ($("#imageKey").value) payload.image_api_key = $("#imageKey").value;
-    await api("/api/ai_settings/1", { method: "PUT", body: JSON.stringify(payload) });
+    // ai_settings 的 PocketBase record id
+    const recordId = (state.ai_settings && state.ai_settings.id) || null;
+    if (recordId) {
+      await geoApi(`/api/ai_settings/${recordId}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      // 没有则创建
+      await geoApi("/api/ai_settings", { method: "POST", body: JSON.stringify({ ...payload, mode: payload.mode || "manual" }) });
+    }
     $("#textKey").value = "";
     $("#imageKey").value = "";
     toast("AI 设置已保存", "success");
@@ -242,20 +270,54 @@ function bindEvents() {
     if (isLoading(btn)) return;
     const productId = Number($("#genProduct").value);
     if (!productId) return toast("请先创建并选择产品", "error");
+    const aiSettings = state.ai_settings || {};
+    if (!aiSettings.text_api_key) return toast("请先配置 AI Key", "error");
     setLoading(btn);
     toast("正在调用模型，可能需要几十秒...");
     try {
-      const data = await api("/api/ai/direct", {
-        method: "POST",
-        body: JSON.stringify({
-          product_id: productId,
-          count: Number($("#genCount").value || 10),
-          platform_ids: selectedValues("#genPlatforms"),
-          content_types: selectedTextValues("#contentTypes"),
-        }),
-      });
-      toast(`已导入 ${data.articles.length} 篇文章`, "success");
+      const product = state.products.find(p => p.id === productId);
+      const platformIds = selectedValues("#genPlatforms");
+      const platforms = platformIds.length
+        ? state.platforms.filter(p => platformIds.includes(p.id))
+        : state.platforms.filter(p => p.status === "enabled").slice(0, 12);
+      const count = Number($("#genCount").value || 10);
+      const contentTypes = selectedTextValues("#contentTypes");
+      const questions = state.geo_questions.filter(q => q.product_id === productId && q.status === "active");
+      const prompt = buildProductPrompt(product, platforms, count, contentTypes, questions);
+      const raw = await callAI(aiSettings, [
+        { role: "system", content: "你是一个严谨的中文内容运营专家，只输出可解析 JSON。" },
+        { role: "user", content: prompt },
+      ]);
+      const parsed = extractJsonArray(raw);
+      let imported = 0;
+      for (const item of parsed) {
+        const title = (item.title || item["标题"] || "").trim();
+        if (!title) continue;
+        let body = (item.body || item["正文"] || item.content || "").trim();
+        if (!title && body) body.splitlines()[0].slice(0, 60); // fallback title
+        await geoApi("/api/articles", {
+          method: "POST",
+          body: JSON.stringify({
+            product_id: productId,
+            geo_question_id: Number(item.geo_question_id || item["问题ID"] || item.question_id || 0),
+            title,
+            summary: (item.summary || item["摘要"] || "").slice(0, 500),
+            body,
+            content_type: item.content_type || item["内容类型"] || "",
+            target_platform: item.target_platform || item["目标平台"] || "",
+            keywords: item.keywords || item["关键词"] || "",
+            tags: item.tags || item["标签"] || "",
+            image_prompt: item.image_prompt || item["配图建议"] || "",
+            risk_notes: item.risk_notes || item["风险提示"] || "",
+            status: "draft",
+          }),
+        });
+        imported++;
+      }
+      toast(`已导入 ${imported} 篇文章`, "success");
       await load();
+    } catch (err) {
+      toast(err.message, "error");
     } finally {
       setLoading(btn, false);
     }
@@ -264,12 +326,38 @@ function bindEvents() {
   $("#importAiBtn").addEventListener("click", async () => {
     const productId = Number($("#genProduct").value);
     if (!productId) return toast("请先创建并选择产品", "error");
-    const data = await api("/api/articles/import", {
-      method: "POST",
-      body: JSON.stringify({ product_id: productId, raw: $("#aiResultBox").value }),
-    });
+    const raw = $("#aiResultBox").value;
+    if (!raw.trim()) return toast("请先粘贴 AI 返回的 JSON", "error");
+    let parsed, imported = 0;
+    try {
+      parsed = extractJsonArray(raw);
+    } catch (err) {
+      return toast("JSON 格式错误：" + err.message, "error");
+    }
+    for (const item of parsed) {
+      const title = (item.title || item["标题"] || "").trim();
+      if (!title) continue;
+      await geoApi("/api/articles", {
+        method: "POST",
+        body: JSON.stringify({
+          product_id: productId,
+          geo_question_id: Number(item.geo_question_id || item["问题ID"] || item.question_id || 0),
+          title,
+          summary: (item.summary || item["摘要"] || "").slice(0, 500),
+          body: (item.body || item["正文"] || item.content || "").trim(),
+          content_type: item.content_type || item["内容类型"] || "",
+          target_platform: item.target_platform || item["目标平台"] || "",
+          keywords: item.keywords || item["关键词"] || "",
+          tags: item.tags || item["标签"] || "",
+          image_prompt: item.image_prompt || item["配图建议"] || "",
+          risk_notes: item.risk_notes || item["风险提示"] || "",
+          status: "draft",
+        }),
+      });
+      imported++;
+    }
     $("#aiResultBox").value = "";
-    toast(`已导入 ${data.articles.length} 篇文章`, "success");
+    toast(`已导入 ${imported} 篇文章`, "success");
     await load();
   });
 
@@ -277,12 +365,13 @@ function bindEvents() {
     const articleId = Number($("#adaptArticle").value);
     const platformId = Number($("#adaptPlatform").value);
     if (!articleId || !platformId) return toast("请选择文章和平台", "error");
-    const data = await api("/api/ai/adapt", {
-      method: "POST",
-      body: JSON.stringify({ article_id: articleId, platform_id: platformId }),
-    });
-    $("#promptBox").value = data.prompt;
-    await copyToClipboard(data.prompt);
+    const article = state.articles.find(a => a.id === articleId);
+    const platform = state.platforms.find(p => p.id === platformId);
+    if (!article || !platform) return toast("文章或平台未找到", "error");
+    const product = state.products.find(p => p.id === article.product_id);
+    const prompt = buildAdaptationPrompt(article, platform, product || null);
+    $("#promptBox").value = prompt;
+    await copyToClipboard(prompt);
     toast("适配 Prompt 已生成并复制", "success");
   });
 
@@ -408,19 +497,22 @@ function bindEvents() {
   $("#generateImageBtn").addEventListener("click", async () => {
     const btn = $("#generateImageBtn");
     if (isLoading(btn)) return;
-    const prompt = ($("#articleImage").value || "").trim();
+    let prompt = ($("#articleImage").value || "").trim();
     const articleId = Number($("#articleId").value);
-    if (!prompt && !articleId) return toast("请先填写配图建议或选择文章", "error");
+    if (!prompt && articleId) {
+      const article = state.articles.find(a => a.id === articleId);
+      prompt = article ? ((article.image_prompt || "") || (article.title || "") + "。" + (article.summary || "")) : "";
+    }
+    if (!prompt) return toast("请先填写配图建议或选择文章", "error");
     if (!state.ai_settings?.image_model) return toast("请先在「内容生成 → AI 设置」中配置图片生成模型", "error");
     setLoading(btn);
     toast("正在生成配图，可能需要几十秒...");
     try {
-      const data = await api("/api/ai/image", {
-        method: "POST",
-        body: JSON.stringify({ prompt, article_id: articleId }),
-      });
-      renderGeneratedImage(data.result, data.base_url);
+      const result = await callImageGeneration(prompt, articleId);
+      renderGeneratedImage(result, state.ai_settings.image_base_url || "");
       toast("配图已生成", "success");
+    } catch (err) {
+      toast(err.message, "error");
     } finally {
       setLoading(btn, false);
     }

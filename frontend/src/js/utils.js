@@ -6,8 +6,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 // --- API ---
 
 async function api(path, options = {}) {
-  // 全部委托给 PocketBase 适配层
-  return window.pbApi(path, options);
+  return window.geoApi(path, options);
 }
 
 // --- Toast ---

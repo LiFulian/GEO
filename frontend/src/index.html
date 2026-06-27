@@ -411,7 +411,16 @@
 
     <div id="toast" class="toast"></div>
     <div id="sidebarOverlay" class="sidebar-overlay"></div>
-    <script src="/js/pb.js"></script>
+    <script>
+      // Vite 环境变量注入（HTML 中的 %VITE_XXX% 在构建时替换）
+      window.__GEO_CONFIG__ = {
+        pbUrl: "%VITE_PB_URL%" || "http://127.0.0.1:8085",
+        pbEmail: "%VITE_PB_EMAIL%" || "admin@geo.local",
+        pbPassword: "%VITE_PB_PASSWORD%" || "admin123456",
+      };
+    </script>
+    <script src="/js/api-client.js"></script>
+    <script src="/js/ai-prompts.js"></script>
     <script src="/js/utils.js"></script>
     <script src="/js/state.js"></script>
     <script src="/js/render.js"></script>
