@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GEO 工具台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">G</span>
+        <div>
+          <strong>GEO Studio</strong>
+          <small>问题覆盖与内容工具</small>
+        </div>
+      </div>
+      <nav>
+        <button class="nav active" data-view="dashboard" data-icon="◈" data-title="总览"><span class="nav-text">总览</span></button>
+        <button class="nav" data-view="products" data-icon="◑" data-title="产品档案"><span class="nav-text">产品档案</span></button>
+        <button class="nav" data-view="geo" data-icon="◎" data-title="GEO 问题"><span class="nav-text">GEO 问题</span></button>
+        <button class="nav" data-view="generator" data-icon="✦" data-title="内容生成"><span class="nav-text">内容生成</span></button>
+        <button class="nav" data-view="articles" data-icon="✎" data-title="文章库"><span class="nav-text">文章库</span></button>
+        <button class="nav" data-view="platforms" data-icon="❖" data-title="发布平台"><span class="nav-text">发布平台</span></button>
+        <button class="nav" data-view="tasks" data-icon="⧉" data-title="发布记录"><span class="nav-text">发布记录</span></button>
+      </nav>
+    </aside>
+    <button id="sidebarToggle" class="sidebar-toggle" aria-label="切换菜单" type="button">☰</button>
+
+    <main class="app">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Personal GEO Toolkit</p>
+          <h1 id="viewTitle">总览</h1>
+        </div>
+        <div class="top-actions">
+          <div class="global-search">
+            <input id="globalSearch" type="text" placeholder="全局搜索…" autocomplete="off" />
+            <kbd class="search-shortcut">⌘K</kbd>
+            <div id="globalSearchResults" class="search-results" style="display:none"></div>
+          </div>
+          <button id="refreshBtn" class="ghost">刷新</button>
+          <div class="dropdown">
+            <button id="moreMenuBtn" class="ghost">更多 ▾</button>
+            <div id="moreMenu" class="dropdown-menu" style="display:none">
+              <button id="importBackupBtn" class="ghost">导入备份</button>
+              <button id="exportBtn" class="solid">导出备份</button>
+            </div>
+          </div>
+          <input id="backupFile" type="file" accept="application/json" hidden />
+        </div>
+      </header>
+
+      <section id="dashboard" class="view active">
+        <div class="stats">
+          <article class="stat-clickable" data-jump="products"><span id="statProducts">0</span><small>产品</small></article>
+          <article class="stat-clickable" data-jump="geo"><span id="statQuestions">0</span><small>GEO 问题</small></article>
+          <article class="stat-clickable" data-jump="articles"><span id="statArticles">0</span><small>文章</small></article>
+          <article class="stat-clickable" data-jump="tasks"><span id="statTasks">0</span><small>发布任务</small></article>
+        </div>
+        <div class="panel hero-panel">
+          <div>
+            <p class="eyebrow">工作方式</p>
+            <h2>先定义用户会问什么，再生成能被 AI 引用的内容。</h2>
+            <p>这个工具只做核心闭环：产品知识、GEO 问题、内容草稿、发布记录。发布仍然由你人工完成，系统帮你把每个平台发了什么、覆盖了哪些问题记录清楚。</p>
+          </div>
+          <div class="flow">
+            <span>产品</span><span>问题</span><span>内容</span><span>发布</span>
+          </div>
+        </div>
+        <div id="onboardingCard" class="panel onboarding" style="display:none"></div>
+        <section class="panel coverage-panel">
+          <div class="panel-heading">
+            <h2>GEO 覆盖概览</h2>
+            <span id="coverageSummary" class="muted">—</span>
+          </div>
+          <div id="coverageByProduct" class="coverage-list"></div>
+          <div id="coverageGaps" class="coverage-gaps"></div>
+        </section>
+        <div class="grid two">
+          <section class="panel">
+            <h3>高优先级 GEO 问题</h3>
+            <div id="topQuestions" class="compact-list"></div>
+          </section>
+          <section class="panel">
+            <h3>最近文章</h3>
+            <div id="recentArticles" class="compact-list"></div>
+          </section>
+        </div>
+        <div class="grid two">
+          <section class="panel">
+            <h3>待发布任务</h3>
+            <div id="todoTasks" class="compact-list"></div>
+          </section>
+          <section class="panel">
+            <h3>工具原则</h3>
+            <div class="compact-list">
+              <div class="list-row"><strong>少功能</strong><div class="muted">只保留能帮助 GEO 覆盖和发布记录的能力。</div></div>
+              <div class="list-row"><strong>可控</strong><div class="muted">AI 生成后先审核，平台发布由人工完成。</div></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="products" class="view">
+        <div class="grid two">
+          <form id="productForm" class="panel form">
+            <div class="panel-heading">
+              <h2 id="productFormTitle">新增产品</h2>
+              <button id="resetProductBtn" class="ghost" type="button">重置</button>
+            </div>
+            <input type="hidden" name="id" id="productId" />
+            <label>产品名称<input name="name" required placeholder="例如：AI 简历优化小程序" /></label>
+            <label>产品类型<input name="type" placeholder="网站 / 小程序 / SaaS / App" /></label>
+            <label>产品链接<input name="url" placeholder="https://..." /></label>
+            <details class="collapse-section"><summary>更多信息（选填）</summary>
+              <div class="form">
+                <label>目标用户<textarea name="audience" placeholder="谁会用？他们有什么痛点？"></textarea></label>
+                <label>核心卖点<textarea name="selling_points" placeholder="功能、优势、差异点"></textarea></label>
+                <label>竞品/替代品<textarea name="competitors" placeholder="用户现在可能用什么替代方案？"></textarea></label>
+                <label>品牌语气<input name="tone" value="真实、专业、克制" /></label>
+                <label>转化目标<input name="goal" placeholder="访问官网 / 体验小程序 / 留资 / 下载" /></label>
+                <label>禁用表达<input name="forbidden_words" placeholder="绝对化、夸大、未证实表述" /></label>
+              </div>
+            </details>
+            <button id="saveProductBtn" class="solid" type="submit">保存产品</button>
+          </form>
+          <div class="stack">
+            <section class="panel form">
+              <h2>AI 梳理产品档案</h2>
+              <p class="hint">把零散介绍、官网文案、想法或竞品描述粘进来，AI 会整理成适合 GEO 内容生成的产品档案。</p>
+              <label>产品描述输入<textarea id="productAiInput" class="product-ai-input" placeholder="例如：我们做了一个给小团队用的客户跟进小程序，可以记录线索、提醒回访、生成日报，目标是让老板不用 Excel 管客户..."></textarea></label>
+              <div class="button-row">
+                <button id="productAiDirectBtn" class="solid" type="button">AI 自动梳理</button>
+                <button id="productAiPromptBtn" class="ghost" type="button">生成 Prompt</button>
+                <button id="productAiApplyBtn" class="ghost" type="button">应用结果</button>
+              </div>
+              <textarea id="productAiResult" class="product-ai-result" placeholder='这里会显示 Prompt 或 AI 返回的 JSON。你也可以手动粘贴 JSON 后点击“应用结果”。'></textarea>
+            </section>
+            <section class="panel">
+              <h2>产品列表</h2>
+              <div id="productList" class="cards"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="geo" class="view">
+        <div class="grid two">
+          <form id="geoQuestionForm" class="panel form">
+            <div class="panel-heading">
+              <h2 id="geoQuestionFormTitle">新增 GEO 问题</h2>
+              <button id="resetGeoQuestionBtn" class="ghost" type="button">重置</button>
+            </div>
+            <input type="hidden" id="geoQuestionId" />
+            <label>关联产品<select id="geoProduct"></select></label>
+            <label>用户会问 AI 的问题<textarea id="geoQuestionText" required placeholder="例如：有没有适合小团队使用的客户跟进小程序？"></textarea></label>
+            <div class="grid two small-gap">
+              <label>意图<input id="geoIntent" placeholder="找工具 / 做对比 / 解决问题" /></label>
+              <label>人群<input id="geoAudience" placeholder="小团队老板 / 运营 / 开发者" /></label>
+            </div>
+            <div class="grid two small-gap">
+              <label>优先级<select id="geoPriority"><option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select></label>
+              <label>状态<select id="geoStatus"><option value="active">active</option><option value="covered">covered</option><option value="paused">paused</option></select></label>
+            </div>
+            <label>内容角度<textarea id="geoAngle" placeholder="建议如何回答这个问题，怎样自然带出产品"></textarea></label>
+            <label>目标平台<input id="geoPlatform" placeholder="知乎 / 公众号 / CSDN / 小红书，可为空" /></label>
+            <button class="solid" type="submit">保存 GEO 问题</button>
+          </form>
+          <section class="panel form">
+            <h2>AI 生成问题库</h2>
+            <p class="hint">先生成问题，再围绕问题写内容。GEO 的重点不是多发文章，而是覆盖用户真实会问 AI 的问题。</p>
+            <label>选择产品<select id="geoPromptProduct"></select></label>
+            <label>问题数量<input id="geoPromptCount" type="number" min="3" max="30" value="12" /></label>
+            <div class="button-row">
+              <button id="buildGeoPromptBtn" class="solid" type="button">生成问题 Prompt</button>
+              <button id="copyGeoPromptBtn" class="ghost" type="button">复制</button>
+            </div>
+            <textarea id="geoPromptBox" class="big-text" placeholder="生成后复制到 Codex / 豆包 / Trae"></textarea>
+            <h3>粘贴 AI 返回的问题 JSON</h3>
+            <textarea id="geoImportBox" class="big-text" placeholder='[{"question":"...","intent":"...","priority":"high"}]'></textarea>
+            <button id="importGeoQuestionsBtn" class="solid" type="button">导入问题库</button>
+          </section>
+        </div>
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>GEO 问题库</h2>
+            <div class="filter-bar">
+              <select id="geoFilterProduct"><option value="">全部产品</option></select>
+              <input id="geoSearch" class="search" placeholder="搜索问题 / 意图 / 人群 / 平台" />
+            </div>
+          </div>
+          <div id="geoQuestionList" class="cards"></div>
+        </section>
+      </section>
+
+      <section id="generator" class="view">
+        <div class="grid two">
+          <section class="panel form">
+            <h2>生成设置</h2>
+            <label>选择产品<select id="genProduct"></select></label>
+            <label>生成篇数<input id="genCount" type="number" min="1" max="50" value="10" /></label>
+            <h3 class="section-label">内容类型</h3>
+            <div class="checks" id="contentTypes"></div>
+            <h3 class="section-label">目标平台</h3>
+            <div class="platform-picker" id="genPlatforms"></div>
+            <div class="button-row">
+              <button id="buildPromptBtn" class="solid">生成 Prompt</button>
+              <button id="directAiBtn" class="ghost">API 直连生成</button>
+            </div>
+          </section>
+          <section class="panel form">
+            <h2>AI 设置</h2>
+            <details class="collapse-section"><summary>展开 AI 高级设置</summary>
+              <div class="form">
+                <p class="hint">免费优先时用“手动模式”：复制 Prompt 到 Codex、Trae、豆包等，再把 JSON 结果粘回来。API 模式适合豆包 Ark、DeepSeek、通义、本地模型网关等 OpenAI-compatible 接口。</p>
+                <label>常用预设<select id="aiPreset"><option value="">选择后自动填充</option></select></label>
+                <label>模式<select id="aiMode"><option value="manual">手动 Prompt</option><option value="api">API 直连</option></select></label>
+                <div class="model-box">
+                  <h3>文本生成模型</h3>
+                  <label>Text Base URL<input id="textBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4" /></label>
+                  <label>Text Model<input id="textModel" placeholder="glm-4-flash" /></label>
+                  <label>Text API Key<input id="textKey" type="password" placeholder="留空则保留已保存 Key" /></label>
+                  <p id="textKeyStatus" class="muted">未保存 Key</p>
+                </div>
+                <div class="model-box">
+                  <h3>图片生成模型</h3>
+                  <label>Image Base URL<input id="imageBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4" /></label>
+                  <label>Image Model<input id="imageModel" placeholder="cogview-3-flash" /></label>
+                  <label>Image API Key<input id="imageKey" type="password" placeholder="留空则保留已保存 Key" /></label>
+                  <p id="imageKeyStatus" class="muted">未保存 Key</p>
+                </div>
+                <label>Temperature<input id="aiTemperature" type="number" min="0" max="2" step="0.1" value="0.7" /></label>
+                <button id="saveAiBtn" class="solid">保存 AI 设置</button>
+              </div>
+            </details>
+          </section>
+        </div>
+        <div class="grid two">
+          <section class="panel form">
+            <div class="panel-heading">
+              <h2>Prompt</h2>
+              <button id="copyPromptBtn" class="ghost">复制</button>
+            </div>
+            <textarea id="promptBox" class="big-text" placeholder="点击“生成 Prompt”后出现"></textarea>
+          </section>
+          <section class="panel form">
+            <h2>粘贴 AI 返回的 JSON</h2>
+            <textarea id="aiResultBox" class="big-text" placeholder='[{"title":"...","summary":"...","body":"..."}]'></textarea>
+            <button id="importAiBtn" class="solid">导入文章库</button>
+          </section>
+        </div>
+        <hr class="section-divider" />
+        <div class="panel form">
+          <h2>平台适配 Prompt</h2>
+          <p class="hint">把已有文章改写成某个平台的版本。适合先生成一篇母稿，再分别适配知乎、小红书、CSDN、公众号等。</p>
+          <div class="grid two small-gap">
+            <label>选择文章<select id="adaptArticle"></select></label>
+            <label>选择平台<select id="adaptPlatform"></select></label>
+          </div>
+          <button id="adaptPromptBtn" class="solid">生成适配 Prompt</button>
+        </div>
+      </section>
+
+      <section id="articles" class="view">
+        <div class="split article-split">
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>文章库</h2>
+              <button id="newArticleBtn" class="ghost">+ 新建文章</button>
+            </div>
+            <div class="filter-bar">
+              <select id="articleFilterProduct"><option value="">全部产品</option></select>
+              <select id="articleFilterStatus"><option value="">全部状态</option><option value="draft">草稿</option><option value="review">待审核</option><option value="approved">已确认</option><option value="archived">归档</option></select>
+              <input id="articleSearch" class="search" placeholder="搜索文章 / 类型 / 平台 / 标签" />
+            </div>
+            <div id="articleList" class="article-list"></div>
+          </section>
+          <section class="panel form editor" id="articleEditor">
+            <div class="editor-header">
+              <h2 id="articleEditorTitle">新建文章</h2>
+              <span id="articleDraftStatus" class="draft-status"></span>
+            </div>
+            <input type="hidden" id="articleId" />
+            <div class="grid two small-gap">
+              <label>关联产品<select id="articleProduct"><option value="0">未关联</option></select></label>
+              <label>状态<select id="articleStatus"><option value="draft">草稿</option><option value="review">待审核</option><option value="approved">已确认</option><option value="archived">归档</option></select></label>
+            </div>
+            <label>关联 GEO 问题<select id="articleGeoQuestion"><option value="0">未关联（不影响覆盖率统计）</option></select></label>
+            <label>标题<input id="articleTitle" /></label>
+            <label>摘要<textarea id="articleSummary"></textarea></label>
+            <label>正文
+              <div class="md-toolbar" id="mdToolbar">
+                <button type="button" class="md-btn" data-md="## ">H2</button>
+                <button type="button" class="md-btn" data-md="### ">H3</button>
+                <button type="button" class="md-btn" data-md="**" data-wrap="true">B</button>
+                <button type="button" class="md-btn" data-md="*" data-wrap="true">I</button>
+                <button type="button" class="md-btn" data-md="- ">列表</button>
+                <button type="button" class="md-btn" data-md="> ">引用</button>
+                <button type="button" class="md-btn" data-md="`" data-wrap="true">代码</button>
+              </div>
+              <textarea id="articleBody" class="body-editor"></textarea>
+            </label>
+            <div class="grid two small-gap">
+              <label>类型<input id="articleType" /></label>
+              <label>目标平台<input id="articlePlatform" /></label>
+            </div>
+            <div class="grid two small-gap">
+            <label>关键词<input id="articleKeywords" /></label>
+              <label>标签<input id="articleTags" /></label>
+            </div>
+            <details class="collapse-section"><summary>配图与风险提示（选填）</summary>
+              <div class="form">
+                <label>配图建议<input id="articleImage" /></label>
+                <div class="button-row">
+                  <button id="generateImageBtn" class="ghost" type="button">生成配图</button>
+                  <button id="copyImagePromptBtn" class="ghost" type="button">复制配图提示词</button>
+                </div>
+                <div id="imageResult" class="image-result"></div>
+                <label>风险提示<textarea id="articleRisk"></textarea></label>
+              </div>
+            </details>
+            <div class="word-count-bar">
+              <span id="wordCount">0 字</span>
+              <span id="charCount">0 字符</span>
+            </div>
+            <div class="button-row">
+              <button id="saveArticleBtn" class="solid">保存文章</button>
+              <button id="cancelArticleBtn" class="ghost">取消编辑</button>
+              <button id="copyArticleBtn" class="ghost">复制正文</button>
+              <button id="exportArticleBtn" class="ghost">导出 Markdown</button>
+              <button id="deleteArticleBtn" class="ghost danger">删除</button>
+            </div>
+            <div class="preview-panel">
+              <h3>排版预览</h3>
+              <div id="previewBody" class="preview-body"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="platforms" class="view">
+        <div class="split platform-split">
+          <form id="platformForm" class="panel form compact-form">
+            <div class="panel-heading">
+              <h2 id="platformFormTitle">平台账号</h2>
+              <button id="resetPlatformBtn" class="ghost" type="button">清空</button>
+            </div>
+            <input type="hidden" id="platformId" />
+            <div class="compact-fields">
+              <label>平台名称<input id="platformName" required /></label>
+              <label>分类<input id="platformCategory" /></label>
+              <label>发布入口<input id="platformUrl" /></label>
+              <label>账号名称<input id="platformAccountName" placeholder="例如：品牌号 / 个人号 A" /></label>
+              <label>登录备注<textarea id="platformLoginNotes" placeholder="登录方式、手机号、验证码负责人、发布注意事项"></textarea></label>
+              <label>适合内容<textarea id="platformContentStyle"></textarea></label>
+              <div class="grid two small-gap">
+                <label>推荐字数<input id="platformWords" /></label>
+                <label>发布频率<input id="platformFrequency" /></label>
+              </div>
+              <label>标题风格<input id="platformTitleStyle" /></label>
+              <label>标签规则<input id="platformTagsRule" /></label>
+              <div class="grid two small-gap">
+                <label>外链<select id="platformLinks"><option value="yes">yes</option><option value="limited">limited</option><option value="no">no</option></select></label>
+                <label>状态<select id="platformStatus"><option value="enabled">enabled</option><option value="watch">watch</option><option value="paused">paused</option></select></label>
+              </div>
+              <label>软文适配<select id="platformFit"><option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select></label>
+              <label>备注<textarea id="platformNotes"></textarea></label>
+            </div>
+            <button class="solid" type="submit">保存平台</button>
+          </form>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>平台库</h2>
+              <input id="platformSearch" class="search" placeholder="搜索平台 / 分类 / 风格 / 账号" />
+            </div>
+            <div id="platformGrid" class="platform-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tasks" class="view">
+        <div class="grid two">
+          <section class="panel form">
+            <h2>分配发布任务</h2>
+            <details class="collapse-section"><summary>+ 新建发布任务</summary>
+              <div class="form">
+                <label>选择文章</label>
+                <div id="taskArticlePicker" class="platform-picker"></div>
+                <label>选择平台</label>
+                <div id="taskPlatformPicker" class="platform-picker"></div>
+                <button id="assignTasksBtn" class="solid">生成发布任务</button>
+              </div>
+            </details>
+          </section>
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>发布看板</h2>
+              <div class="task-view-switch">
+                <button id="taskBoardViewBtn" class="ghost active" data-view="board">看板</button>
+                <button id="taskCalendarViewBtn" class="ghost" data-view="calendar">日历</button>
+              </div>
+              <input id="taskSearch" class="search" placeholder="搜索文章 / 平台 / 账号" />
+            </div>
+            <div id="taskBoard" class="task-board"></div>
+            <div id="taskCalendar" class="task-calendar" style="display:none"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <div id="sidebarOverlay" class="sidebar-overlay"></div>
+    <script src="/js/pb.js"></script>
+    <script src="/js/utils.js"></script>
+    <script src="/js/state.js"></script>
+    <script src="/js/render.js"></script>
+    <script src="/js/events.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

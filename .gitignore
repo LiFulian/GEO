@@ -1,0 +1,35 @@
+# Dependencies
+frontend/node_modules/
+frontend/dist/
+
+# PocketBase runtime data
+pocketbase/pb_data/
+pocketbase/pb_migrations/
+pocketbase/pocketbase
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Legacy (old Python monolith)
+legacy/
+
+# Scripts (migration helpers, no longer needed)
+scripts/
+
+# Logs
+*.log
+
+# Config with secrets
+config/
+
+# Code Wiki (outdated)
+CODE_WIKI.md
