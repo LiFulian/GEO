@@ -2,13 +2,15 @@
 .env
 .env.local
 .env.*.local
+
+# Dependencies
 frontend/node_modules/
 frontend/dist/
 
-# PocketBase runtime data
-pocketbase/pb_data/
-pocketbase/pb_migrations/
+# PocketBase binary（不纳入版本管理，从 GitHub Releases 下载）
 pocketbase/pocketbase
+# PocketBase 运行时数据（用户生成的数据库）
+pocketbase/pb_data/
 
 # Python
 __pycache__/
@@ -25,14 +27,5 @@ __pycache__/
 # Legacy (old Python monolith)
 legacy/
 
-# Scripts (migration helpers, no longer needed)
-scripts/
-
 # Logs
 *.log
-
-# Config with secrets
-config/
-
-# Code Wiki (outdated)
-CODE_WIKI.md
