@@ -1,6 +1,60 @@
 /* GEO Studio - Event binding with event delegation */
 
 function bindEvents() {
+  // --- Auth ---
+  renderAuthView();
+
+  $("#loginForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    try {
+      await userLogin($("#loginEmail").value, $("#loginPassword").value);
+      hideAuthView();
+      await load();
+      toast("登录成功", "success");
+    } catch (err) { toast(err.message, "error"); }
+  });
+
+  $("#registerForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const pw = $("#regPassword").value;
+    const pw2 = $("#regPasswordConfirm").value;
+    if (pw !== pw2) return toast("两次密码不一致", "error");
+    try {
+      await userRegister($("#regEmail").value, pw, $("#regName").value);
+      hideAuthView();
+      await load();
+      toast("注册成功，欢迎！", "success");
+    } catch (err) { toast(err.message, "error"); }
+  });
+
+  $("#logoutBtn").addEventListener("click", () => {
+    userLogout();
+    state.products = []; state.geo_questions = []; state.platforms = [];
+    state.articles = []; state.tasks = []; state.ai_settings = {};
+    state.user_models = [];
+    showAuthView();
+    render();
+  });
+
+  $("#settingsBtn").addEventListener("click", () => showView("settings"));
+  $("#currentModelLabel")?.addEventListener("click", () => showView("settings"));
+
+  // Auth tabs
+  $$("#authTabs .auth-tab").forEach(tab => tab.addEventListener("click", () => {
+    $$("#authTabs .auth-tab").forEach(t => t.classList.toggle("active", t === tab));
+    $("#loginForm").style.display = tab.dataset.tab === "login" ? "flex" : "none";
+    $("#registerForm").style.display = tab.dataset.tab === "register" ? "flex" : "none";
+  }));
+
+  // Account selector chips
+  renderAccountChips();
+  $$("#accountChips .account-chip").forEach(chip => chip.addEventListener("click", () => {
+    $$("#accountChips .account-chip").forEach(c => c.classList.remove("active"));
+    chip.classList.add("active");
+    $("#loginEmail").value = chip.dataset.email;
+    $("#loginPassword").value = chip.dataset.password;
+  }));
+
   // --- Navigation ---
   $$(".nav").forEach(btn => btn.addEventListener("click", () => {
     showView(btn.dataset.view);
@@ -18,9 +72,10 @@ function bindEvents() {
   });
 
   // --- Top Bar ---
-  $("#refreshBtn").addEventListener("click", () => {
+  $("#refreshBtn").addEventListener("click", async () => {
     setLoading($("#refreshBtn"), true);
-    load().finally(() => setLoading($("#refreshBtn"), false));
+    try { await load(); } catch (e) { toast("刷新失败：" + e.message, "error"); }
+    setLoading($("#refreshBtn"), false);
   });
 
   // 更多菜单（导入/导出备份）
@@ -38,50 +93,216 @@ function bindEvents() {
   }));
 
   $("#exportBtn").addEventListener("click", async () => {
-    const backup = await api("/api/backup");
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `geo-backup-${Date.now()}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    try {
+      const backup = await api("/api/backup");
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `geo-backup-${Date.now()}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast("备份已导出", "success");
+    } catch (e) {
+      toast("导出失败：" + e.message, "error");
+    }
   });
 
   $("#importBackupBtn").addEventListener("click", () => $("#backupFile").click());
   $("#backupFile").addEventListener("change", async event => {
     const file = event.target.files?.[0];
     if (!file) return;
-    toast("备份导入功能将在后续版本中重新支持", "error");
+
+    let backup;
+    try {
+      const text = await file.text();
+      backup = JSON.parse(text);
+    } catch (err) {
+      toast("备份文件格式错误：" + err.message, "error");
+      event.target.value = "";
+      return;
+    }
+
+    if (!confirm(`确定导入备份？\n\n产品: ${backup.products?.length || 0}\nGEO问题: ${backup.geo_questions?.length || 0}\n文章: ${backup.articles?.length || 0}\n平台: ${backup.platforms?.length || 0}\n\n现有数据不会被覆盖，将追加导入。`)) {
+      event.target.value = "";
+      return;
+    }
+
+    const userId = getCurrentUserId();
+    let imported = 0, skipped = 0, errors = 0;
+
+    const importRecords = async (collection, records) => {
+      if (!records || !Array.isArray(records)) return;
+      for (const record of records) {
+        const { id, collectionId, collectionName, created_at, updated_at, created, updated, expand, ...rest } = record;
+        rest.user_id = userId;
+        if (!rest.created_at) rest.created_at = created || new Date().toISOString();
+        if (!rest.updated_at) rest.updated_at = updated || new Date().toISOString();
+        try {
+          await api(`/api/${collection}`, { method: "POST", body: JSON.stringify(rest) });
+          imported++;
+        } catch (e) {
+          errors++;
+          console.warn(`导入 ${collection} 失败：`, record.id || record.name || record.title, e.message);
+        }
+      }
+    };
+
+    toast("正在导入备份...");
+    try {
+      await importRecords("products", backup.products);
+      await importRecords("geo_questions", backup.geo_questions);
+      await importRecords("platforms", backup.platforms);
+      await importRecords("articles", backup.articles);
+      await importRecords("publish_tasks", backup.tasks);
+      await importRecords("user_models", backup.user_models);
+
+      // ai_settings: 仅导入设置，不覆盖 API Key
+      if (backup.ai_settings && typeof backup.ai_settings === "object") {
+        const { id, collectionId, collectionName, created_at, updated_at, created, updated, expand, ...rest } = backup.ai_settings;
+        delete rest.text_api_key;
+        delete rest.image_api_key;
+        delete rest.api_key;
+        rest.user_id = userId;
+        try {
+          await api("/api/ai_settings", { method: "POST", body: JSON.stringify(rest) });
+          imported++;
+        } catch (e) {
+          errors++;
+          console.warn("导入 ai_settings 失败：", e.message);
+        }
+      }
+
+      toast(`备份导入完成：成功 ${imported} 条${errors ? "，失败 " + errors + " 条" : ""}`, errors ? "default" : "success");
+      await load();
+    } catch (err) {
+      toast("导入过程中出错：" + err.message, "error");
+    }
+
     event.target.value = "";
-    // TODO: 实现 PocketBase 版本的备份导入
   });
 
   // --- Products ---
   $("#productForm").addEventListener("submit", async event => {
     event.preventDefault();
-    const payload = formData(event.target);
-    const id = Number(payload.id);
-    delete payload.id;
-    if (id) {
-      await api(`/api/products/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-    } else {
-      await api("/api/products", { method: "POST", body: JSON.stringify(payload) });
+    try {
+      const payload = formData(event.target);
+      const id = payload.id;
+      delete payload.id;
+      if (id) {
+        await api(`/api/products/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await api("/api/products", { method: "POST", body: JSON.stringify(payload) });
+      }
+      toast("产品已保存", "success");
+      resetProductForm();
+      switchSubTab("product-list");
+      await load();
+    } catch (e) {
+      toast("保存失败：" + e.message, "error");
     }
-    resetProductForm();
-    toast("产品已保存", "success");
-    await load();
   });
   $("#resetProductBtn").addEventListener("click", () => {
     if ($("#productForm").elements.name.value && !confirm("确定清空当前表单？")) return;
     resetProductForm();
   });
 
+  // 产品子菜单切换
+  $$(".sub-tab[data-tab='product-list'], .sub-tab[data-tab='product-add']").forEach(tab =>
+    tab.addEventListener("click", () => switchSubTab(tab.dataset.tab))
+  );
+  $("#productSearch")?.addEventListener("input", debounce(renderProducts, 200));
+
+  // --- Product Detail ---
+  $("#pdSaveBtn")?.addEventListener("click", async () => {
+    await saveProductFromForm({ showToast: true });
+  });
+
+  $("#pdBackBtn")?.addEventListener("click", () => {
+    showView("products");
+  });
+
+  $("#pdDeleteBtn")?.addEventListener("click", async () => {
+    const id = ($("#pdId")?.value) || "";
+    if (!id) return toast("未选择产品", "error");
+    if (!confirm("确定删除该产品？相关数据不会删除。")) return;
+    try {
+      await api(`/api/products/${id}`, { method: "DELETE" });
+      toast("产品已删除", "success");
+      showView("products");
+      await load();
+    } catch (e) { toast("删除失败：" + e.message, "error"); }
+  });
+
+  // 全字段自动保存 + 状态指示
+  const pdFields = ["pdName", "pdType", "pdUrl", "pdStatus"];
+  const autoSaveAll = debounce(() => saveProductFromForm({ showToast: false, silent: true }), 800);
+  pdFields.forEach(id => {
+    const el = $("#" + id);
+    if (!el) return;
+    el.addEventListener("input", () => { setPdSaveStatus("dirty"); autoSaveAll(); });
+    el.addEventListener("change", () => { setPdSaveStatus("dirty"); autoSaveAll(); });
+  });
+
+  $("#pdMarkdown")?.addEventListener("input", () => {
+    updateProductMdPreview();
+    setPdSaveStatus("dirty");
+  });
+  $("#pdMarkdown")?.addEventListener("input", debounce(() => {
+    saveProductFromForm({ showToast: false, silent: true, onlyDescription: true });
+  }, 800));
+
+  $$(".pd-view-btn").forEach(btn => btn.addEventListener("click", () => {
+    $$(".pd-view-btn").forEach(b => b.classList.toggle("active", b === btn));
+    const mode = btn.dataset.mode;
+    if ($("#pdMarkdown")) $("#pdMarkdown").style.display = mode === "edit" ? "" : "none";
+    if ($("#pdPreview")) $("#pdPreview").style.display = mode === "preview" ? "block" : "none";
+  }));
+
+  $("#pdUploadImageBtn")?.addEventListener("click", () => {
+    let fileInput = $("#pdFileInput");
+    if (!fileInput) {
+      fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.id = "pdFileInput";
+      fileInput.accept = "image/*";
+      fileInput.style.display = "none";
+      document.body.appendChild(fileInput);
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        const productId = ($("#pdId")?.value) || "";
+        if (!productId) { toast("请先保存产品", "error"); fileInput.value = ""; return; }
+        const form = new FormData();
+        form.append("image", file);
+        form.append("product_id", productId);
+        form.append("user_id", getCurrentUserId());
+        const pbUrl = (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "http://127.0.0.1:8085";
+        try {
+          const token = await apiAuth();
+          const res = await fetch(`${pbUrl}/api/collections/product_images/records`, {
+            method: "POST",
+            headers: { Authorization: token },
+            body: form,
+          });
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.message || `上传失败 (HTTP ${res.status})`);
+          }
+          toast("图片已上传", "success");
+          await load();
+        } catch (err) { toast(err.message, "error"); }
+        fileInput.value = "";
+      });
+    }
+    fileInput.click();
+  });
+
   // --- Product AI ---
   $("#productAiPromptBtn").addEventListener("click", async () => {
     const rawText = $("#productAiInput").value.trim();
     if (!rawText) return toast("请先输入产品描述", "error");
-    const pid = Number($("#productId").value || 0);
+    const pid = $("#productId").value || "";
     const currentProduct = pid ? state.products.find(p => p.id === pid) : null;
     const prompt = buildProductProfilePrompt(rawText, currentProduct);
     $("#productAiResult").value = prompt;
@@ -98,8 +319,8 @@ function bindEvents() {
     toast("正在梳理产品档案...");
     try {
       const aiSettings = state.ai_settings || {};
-      if (!aiSettings.text_api_key) return toast("请先在「内容生成」中配置 AI Key", "error");
-      const pid = Number($("#productId").value || 0);
+      if (!aiSettings.text_api_key) return toast("请先在「AI 设置」中配置文本模型 Key", "error");
+      const pid = $("#productId").value || "";
       const currentProduct = pid ? state.products.find(p => p.id === pid) : null;
       const prompt = buildProductProfilePrompt(rawText, currentProduct);
       const result = await callAI(aiSettings, [
@@ -126,40 +347,72 @@ function bindEvents() {
     }
   });
 
-  // --- GEO Questions ---
+  // --- AI Chat ---
+  $("#pdChatSend")?.addEventListener("click", sendPdChatMessage);
+  $("#pdChatInput")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendPdChatMessage();
+    }
+  });
+
+  // --- Product Detail Tabs ---
+  $$(".pd-tab").forEach(tab => tab.addEventListener("click", () => {
+    $$(".pd-tab").forEach(t => t.classList.toggle("active", t === tab));
+    $$(".pd-tab-panel").forEach(p => p.classList.remove("active"));
+    const target = tab.dataset.tab;
+    if (target === "profile") $("#pdTabProfile").classList.add("active");
+    else if (target === "geo") $("#pdTabGeo").classList.add("active");
+  }));
+
+  // --- GEO Questions (in product detail) ---
+  $("#pdGeoToggleForm")?.addEventListener("click", () => {
+    resetGeoQuestionForm();
+    $("#geoQuestionForm").style.display = "";
+    $("#geoQuestionText")?.focus();
+  });
+  $("#cancelGeoQuestionBtn")?.addEventListener("click", () => {
+    $("#geoQuestionForm").style.display = "none";
+    resetGeoQuestionForm();
+  });
+
   $("#geoQuestionForm").addEventListener("submit", async event => {
     event.preventDefault();
-    const id = Number($("#geoQuestionId").value);
-    const payload = {
-      product_id: Number($("#geoProduct").value || 0),
-      question: $("#geoQuestionText").value,
-      intent: $("#geoIntent").value,
-      audience: $("#geoAudience").value,
-      priority: $("#geoPriority").value,
-      status: $("#geoStatus").value,
-      content_angle: $("#geoAngle").value,
-      target_platform: $("#geoPlatform").value,
-    };
-    if (!payload.product_id) return toast("请先选择产品", "error");
-    if (id) {
-      await api(`/api/geo_questions/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-    } else {
-      await api("/api/geo_questions", { method: "POST", body: JSON.stringify(payload) });
+    try {
+      const id = $("#geoQuestionId").value;
+      const payload = {
+        product_id: $("#geoProduct").value || $("#pdId").value || "",
+        question: $("#geoQuestionText").value,
+        intent: $("#geoIntent").value,
+        audience: $("#geoAudience").value,
+        priority: $("#geoPriority").value,
+        status: $("#geoStatus").value,
+        content_angle: $("#geoAngle").value,
+        target_platform: $("#geoPlatform").value,
+      };
+      if (!payload.product_id) return toast("请先保存产品", "error");
+      if (id) {
+        await api(`/api/geo_questions/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await api("/api/geo_questions", { method: "POST", body: JSON.stringify(payload) });
+      }
+      resetGeoQuestionForm();
+      $("#geoQuestionForm").style.display = "none";
+      toast("GEO 问题已保存", "success");
+      await load();
+    } catch (e) {
+      toast("保存失败：" + e.message, "error");
     }
-    resetGeoQuestionForm();
-    toast("GEO 问题已保存", "success");
-    await load();
   });
   $("#resetGeoQuestionBtn").addEventListener("click", () => {
-    if ($("#geoQuestionText").value && !confirm("确定清空当前表单？")) return;
+    $("#geoQuestionForm").style.display = "none";
     resetGeoQuestionForm();
   });
   $("#geoSearch").addEventListener("input", debounce(renderGeoQuestions, 200));
-  $("#geoFilterProduct")?.addEventListener("change", renderGeoQuestions);
 
   $("#buildGeoPromptBtn").addEventListener("click", async () => {
-    const productId = Number($("#geoPromptProduct").value);
-    if (!productId) return toast("请先创建并选择产品", "error");
+    const productId = ($("#pdId").value) || "";
+    if (!productId) return toast("请先保存产品", "error");
     const product = state.products.find(p => p.id === productId);
     if (!product) return toast("未找到产品", "error");
     const count = Number($("#geoPromptCount").value || 12);
@@ -174,8 +427,8 @@ function bindEvents() {
   });
 
   $("#importGeoQuestionsBtn").addEventListener("click", async () => {
-    const productId = Number($("#geoPromptProduct").value);
-    if (!productId) return toast("请先选择产品", "error");
+    const productId = ($("#pdId").value) || "";
+    if (!productId) return toast("请先保存产品", "error");
     const raw = $("#geoImportBox").value;
     if (!raw.trim()) return toast("请先粘贴 AI 返回的 JSON", "error");
     let parsed, imported = 0, skipped = 0;
@@ -187,7 +440,7 @@ function bindEvents() {
     for (const item of parsed) {
       const question = (item.question || item["问题"] || "").trim();
       if (!question) { skipped++; continue; }
-      await geoApi("/api/geo_questions", {
+      await api("/api/geo_questions", {
         method: "POST",
         body: JSON.stringify({
           product_id: productId,
@@ -207,56 +460,93 @@ function bindEvents() {
     await load();
   });
 
-  // --- Generator ---
-  $("#buildPromptBtn").addEventListener("click", async () => {
-    const productId = Number($("#genProduct").value);
-    if (!productId) return toast("请先创建并选择产品", "error");
-    const product = state.products.find(p => p.id === productId);
-    if (!product) return toast("未找到产品", "error");
-    const count = Number($("#genCount").value || 10);
-    const platformIds = selectedValues("#genPlatforms");
-    const platforms = platformIds.length
-      ? state.platforms.filter(p => platformIds.includes(p.id))
-      : state.platforms.filter(p => p.status === "enabled").slice(0, 12);
-    const contentTypes = selectedTextValues("#contentTypes");
-    const questions = state.geo_questions.filter(q => q.product_id === productId && q.status === "active");
-    const prompt = buildProductPrompt(product, platforms, count, contentTypes, questions);
-    $("#promptBox").value = prompt;
-    toast("Prompt 已生成", "success");
-  });
-
-  $("#copyPromptBtn").addEventListener("click", async () => {
-    await copyToClipboard($("#promptBox").value);
-    toast("Prompt 已复制", "success");
-  });
-
-  $("#saveAiBtn").addEventListener("click", async () => {
-    const payload = {
-      mode: $("#aiMode").value,
-      text_base_url: $("#textBaseUrl").value,
-      text_model: $("#textModel").value,
-      image_base_url: $("#imageBaseUrl").value,
-      image_model: $("#imageModel").value,
-      temperature: Number($("#aiTemperature").value || 0.7),
-    };
-    if ($("#textKey").value) payload.text_api_key = $("#textKey").value;
-    if ($("#imageKey").value) payload.image_api_key = $("#imageKey").value;
-    // ai_settings 的 PocketBase record id
-    const recordId = (state.ai_settings && state.ai_settings.id) || null;
-    if (recordId) {
-      await geoApi(`/api/ai_settings/${recordId}`, { method: "PUT", body: JSON.stringify(payload) });
-    } else {
-      // 没有则创建
-      await geoApi("/api/ai_settings", { method: "POST", body: JSON.stringify({ ...payload, mode: payload.mode || "manual" }) });
+  // --- 文章导入 ---
+  $("#importArticlesBtn")?.addEventListener("click", async () => {
+    const productId = ($("#importArticleProduct")?.value) || "";
+    if (!productId) return toast("请选择关联产品", "error");
+    const raw = ($("#articleImportBox")?.value || "").trim();
+    if (!raw) return toast("请先粘贴 AI 返回的 JSON", "error");
+    const geoQuestionId = ($("#importArticleGeoQuestion")?.value) || "0";
+    let parsed, imported = 0, skipped = 0;
+    try {
+      parsed = extractJsonArray(raw);
+    } catch (err) {
+      return toast("JSON 格式错误：" + err.message, "error");
     }
-    $("#textKey").value = "";
-    $("#imageKey").value = "";
-    toast("AI 设置已保存", "success");
+    for (const item of parsed) {
+      const title = (item.title || item["标题"] || "").trim();
+      if (!title) { skipped++; continue; }
+      const payload = {
+        product_id: productId,
+        title,
+        body: item.body || item["正文"] || "",
+        summary: item.summary || item["摘要"] || "",
+        content_type: item.content_type || item["类型"] || "",
+        target_platform: item.target_platform || item["目标平台"] || "",
+        keywords: item.keywords || item["关键词"] || "",
+        tags: item.tags || item["标签"] || "",
+        image_prompt: item.image_prompt || item["配图建议"] || "",
+        risk_notes: item.risk_notes || item["风险提示"] || "",
+        geo_question_id: String(item.geo_question_id || item["geo_question_id"] || geoQuestionId || "0"),
+        status: "draft",
+      };
+      try {
+        await api("/api/articles", { method: "POST", body: JSON.stringify(payload) });
+        imported++;
+      } catch (e) {
+        skipped++;
+        console.warn("文章导入失败：", title, e.message);
+      }
+    }
+    $("#articleImportBox").value = "";
+    toast(`已导入 ${imported} 篇文章${skipped ? "，" + skipped + " 条跳过" : ""}`, "success");
     await load();
   });
 
+  // --- 文章导入产品选择联动 ---
+  $("#importArticleProduct")?.addEventListener("change", () => {
+    const agEl = $("#importArticleGeoQuestion");
+    if (!agEl) return;
+    const productId = $("#importArticleProduct").value || "";
+    const qs = state.geo_questions.filter(q => !productId || String(q.product_id) === productId);
+    agEl.innerHTML = `<option value="">未关联</option>` +
+      qs.map(q => `<option value="${q.id}">${escapeHtml(q.question)}</option>`).join("");
+  });
+
+  $("#saveAiBtn").addEventListener("click", async () => {
+    try {
+      const payload = {
+        mode: $("#aiMode").value,
+        text_base_url: $("#textBaseUrl").value,
+        text_model: $("#textModel").value,
+        image_base_url: $("#imageBaseUrl").value,
+        image_model: $("#imageModel").value,
+        temperature: Number($("#aiTemperature").value || 0.7),
+      };
+      if ($("#textKey").value) payload.text_api_key = $("#textKey").value;
+      if ($("#imageKey").value) payload.image_api_key = $("#imageKey").value;
+      const recordId = (state.ai_settings && state.ai_settings.id) || null;
+      if (recordId) {
+        await geoApi(`/api/ai_settings/${recordId}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await geoApi("/api/ai_settings", { method: "POST", body: JSON.stringify({ ...payload, mode: payload.mode || "manual" }) });
+      }
+      $("#textKey").value = "";
+      $("#imageKey").value = "";
+      toast("AI 设置已保存", "success");
+      await load();
+    } catch (e) {
+      toast("保存失败：" + e.message, "error");
+    }
+  });
+
   $("#aiPreset").addEventListener("change", () => {
-    const preset = aiPresets[Number($("#aiPreset").value)];
+    const val = $("#aiPreset").value;
+    if (val.startsWith("custom_")) {
+      applyUserModelToSettings(Number(val.replace("custom_", "")));
+      return;
+    }
+    const preset = aiPresets[Number(val)];
     if (!preset) return;
     $("#aiMode").value = "api";
     $("#textBaseUrl").value = preset.text_base_url || "";
@@ -265,57 +555,46 @@ function bindEvents() {
     $("#imageModel").value = preset.image_model || "";
   });
 
-  $("#directAiBtn").addEventListener("click", async () => {
-    const btn = $("#directAiBtn");
+  // --- Workshop (AI 生成配置，写入文章编辑器) ---
+  $("#workshopDirectBtn")?.addEventListener("click", async () => {
+    const btn = $("#workshopDirectBtn");
     if (isLoading(btn)) return;
-    const productId = Number($("#genProduct").value);
-    if (!productId) return toast("请先创建并选择产品", "error");
+    const productId = ($("#workshopProduct")?.value) || "";
+    if (!productId) return toast("请选择产品", "error");
+    const product = state.products.find(p => p.id === productId);
+    if (!product) return toast("未找到产品", "error");
+
+    const types = selectedTextValues("#workshop .workshop-types");
+    const platformNames = selectedTextValues("#workshop .workshop-platforms");
+    const notes = ($("#workshopNote")?.value || "").trim();
+
+    if (!types.length && !platformNames.length) return toast("请至少选择一个内容类型或平台", "error");
+
     const aiSettings = state.ai_settings || {};
     if (!aiSettings.text_api_key) return toast("请先配置 AI Key", "error");
+
+    // 获取该产品的 GEO 问题，使用更丰富的 prompt
+    const geoQuestions = state.geo_questions.filter(q => String(q.product_id) === productId && q.status === "active");
+    const platformObjs = state.platforms.filter(p => platformNames.includes(p.name));
+
+    let prompt;
+    if (geoQuestions.length > 0 && platformObjs.length > 0) {
+      // 使用带 GEO 问题上下文的富 prompt
+      prompt = buildProductPrompt(product, platformObjs, 1, types, geoQuestions);
+    } else {
+      // 回退到简单 prompt
+      prompt = buildWorkshopPrompt(product, types, platformNames, notes);
+    }
+
     setLoading(btn);
-    toast("正在调用模型，可能需要几十秒...");
+    toast("正在生成内容...");
     try {
-      const product = state.products.find(p => p.id === productId);
-      const platformIds = selectedValues("#genPlatforms");
-      const platforms = platformIds.length
-        ? state.platforms.filter(p => platformIds.includes(p.id))
-        : state.platforms.filter(p => p.status === "enabled").slice(0, 12);
-      const count = Number($("#genCount").value || 10);
-      const contentTypes = selectedTextValues("#contentTypes");
-      const questions = state.geo_questions.filter(q => q.product_id === productId && q.status === "active");
-      const prompt = buildProductPrompt(product, platforms, count, contentTypes, questions);
       const raw = await callAI(aiSettings, [
-        { role: "system", content: "你是一个严谨的中文内容运营专家，只输出可解析 JSON。" },
+        { role: "system", content: "你是一个专业的中文内容创作者，输出 Markdown 格式文本。" },
         { role: "user", content: prompt },
       ]);
-      const parsed = extractJsonArray(raw);
-      let imported = 0;
-      for (const item of parsed) {
-        const title = (item.title || item["标题"] || "").trim();
-        if (!title) continue;
-        let body = (item.body || item["正文"] || item.content || "").trim();
-        if (!title && body) body.splitlines()[0].slice(0, 60); // fallback title
-        await geoApi("/api/articles", {
-          method: "POST",
-          body: JSON.stringify({
-            product_id: productId,
-            geo_question_id: Number(item.geo_question_id || item["问题ID"] || item.question_id || 0),
-            title,
-            summary: (item.summary || item["摘要"] || "").slice(0, 500),
-            body,
-            content_type: item.content_type || item["内容类型"] || "",
-            target_platform: item.target_platform || item["目标平台"] || "",
-            keywords: item.keywords || item["关键词"] || "",
-            tags: item.tags || item["标签"] || "",
-            image_prompt: item.image_prompt || item["配图建议"] || "",
-            risk_notes: item.risk_notes || item["风险提示"] || "",
-            status: "draft",
-          }),
-        });
-        imported++;
-      }
-      toast(`已导入 ${imported} 篇文章`, "success");
-      await load();
+      applyWorkshopResult(raw, productId, types, platformNames);
+      toast("内容已生成，请检查后保存", "success");
     } catch (err) {
       toast(err.message, "error");
     } finally {
@@ -323,62 +602,107 @@ function bindEvents() {
     }
   });
 
-  $("#importAiBtn").addEventListener("click", async () => {
-    const productId = Number($("#genProduct").value);
-    if (!productId) return toast("请先创建并选择产品", "error");
-    const raw = $("#aiResultBox").value;
-    if (!raw.trim()) return toast("请先粘贴 AI 返回的 JSON", "error");
-    let parsed, imported = 0;
-    try {
-      parsed = extractJsonArray(raw);
-    } catch (err) {
-      return toast("JSON 格式错误：" + err.message, "error");
+  $("#workshopPromptBtn")?.addEventListener("click", async () => {
+    const productId = ($("#workshopProduct")?.value) || "";
+    if (!productId) return toast("请选择产品", "error");
+    const product = state.products.find(p => p.id === productId);
+    if (!product) return toast("未找到产品", "error");
+
+    const types = selectedTextValues("#workshop .workshop-types");
+    const platformNames = selectedTextValues("#workshop .workshop-platforms");
+    const notes = ($("#workshopNote")?.value || "").trim();
+
+    // 获取该产品的 GEO 问题，使用更丰富的 prompt
+    const geoQuestions = state.geo_questions.filter(q => String(q.product_id) === productId && q.status === "active");
+    const platformObjs = state.platforms.filter(p => platformNames.includes(p.name));
+
+    let prompt;
+    if (geoQuestions.length > 0 && platformObjs.length > 0) {
+      prompt = buildProductPrompt(product, platformObjs, 1, types, geoQuestions);
+    } else {
+      prompt = buildWorkshopPrompt(product, types, platformNames, notes);
     }
-    for (const item of parsed) {
-      const title = (item.title || item["标题"] || "").trim();
-      if (!title) continue;
-      await geoApi("/api/articles", {
-        method: "POST",
-        body: JSON.stringify({
-          product_id: productId,
-          geo_question_id: Number(item.geo_question_id || item["问题ID"] || item.question_id || 0),
-          title,
-          summary: (item.summary || item["摘要"] || "").slice(0, 500),
-          body: (item.body || item["正文"] || item.content || "").trim(),
-          content_type: item.content_type || item["内容类型"] || "",
-          target_platform: item.target_platform || item["目标平台"] || "",
-          keywords: item.keywords || item["关键词"] || "",
-          tags: item.tags || item["标签"] || "",
-          image_prompt: item.image_prompt || item["配图建议"] || "",
-          risk_notes: item.risk_notes || item["风险提示"] || "",
-          status: "draft",
-        }),
-      });
-      imported++;
-    }
-    $("#aiResultBox").value = "";
-    toast(`已导入 ${imported} 篇文章`, "success");
-    await load();
+
+    applyWorkshopResult(prompt, productId, types, platformNames);
+    await copyToClipboard(prompt);
+    toast("Prompt 已生成、填入编辑器并复制", "success");
   });
 
-  $("#adaptPromptBtn").addEventListener("click", async () => {
-    const articleId = Number($("#adaptArticle").value);
-    const platformId = Number($("#adaptPlatform").value);
-    if (!articleId || !platformId) return toast("请选择文章和平台", "error");
-    const article = state.articles.find(a => a.id === articleId);
-    const platform = state.platforms.find(p => p.id === platformId);
-    if (!article || !platform) return toast("文章或平台未找到", "error");
-    const product = state.products.find(p => p.id === article.product_id);
-    const prompt = buildAdaptationPrompt(article, platform, product || null);
-    $("#promptBox").value = prompt;
-    await copyToClipboard(prompt);
-    toast("适配 Prompt 已生成并复制", "success");
+  $("#workshopRewriteBtn")?.addEventListener("click", () => workshopAiEdit("改写"));
+  $("#workshopExpandBtn")?.addEventListener("click", () => workshopAiEdit("扩写"));
+
+  // 平台适配改写
+  $("#workshopAdaptBtn")?.addEventListener("click", async () => {
+    const btn = $("#workshopAdaptBtn");
+    if (isLoading(btn)) return;
+    const body = ($("#articleBody")?.value || "").trim();
+    if (!body) return toast("内容为空，请先填写或生成文章", "error");
+
+    const aiSettings = state.ai_settings || {};
+    if (!aiSettings.text_api_key) return toast("请先配置 AI Key", "error");
+
+    // 弹出平台选择模态框
+    const platformOptions = state.platforms.filter(p => p.status === "enabled");
+    if (!platformOptions.length) return toast("没有可用的平台", "error");
+
+    showPlatformSelectModal(platformOptions, async (platform) => {
+      // 获取关联产品
+      const articleProductId = $("#articleProduct")?.value || "";
+      const workshopProductId = $("#workshopProduct")?.value || "";
+      const pid = articleProductId || workshopProductId;
+      const product = pid ? state.products.find(p => p.id === pid) : null;
+
+      // 构建当前文章对象
+      const article = {
+        title: $("#articleTitle")?.value || "",
+        summary: $("#articleSummary")?.value || "",
+        body: body,
+        content_type: $("#articleType")?.value || "",
+        target_platform: $("#articlePlatform")?.value || "",
+        keywords: $("#articleKeywords")?.value || "",
+        tags: $("#articleTags")?.value || "",
+        image_prompt: $("#articleImage")?.value || "",
+        risk_notes: $("#articleRisk")?.value || "",
+      };
+
+      const prompt = buildAdaptationPrompt(article, platform, product);
+
+      setLoading(btn);
+      toast(`正在适配「${platform.name}」...`);
+      try {
+        const raw = await callAI(aiSettings, [
+          { role: "system", content: "你是一个专业的中文内容创作者，熟悉各平台内容规范。输出 JSON 对象。" },
+          { role: "user", content: prompt },
+        ]);
+        const result = extractJsonObject(raw);
+        // 将适配结果填入编辑器
+        if (result.title) $("#articleTitle").value = result.title;
+        if (result.body) $("#articleBody").value = result.body;
+        if (result.summary) $("#articleSummary").value = result.summary;
+        if (result.content_type) $("#articleType").value = result.content_type;
+        if (result.target_platform) $("#articlePlatform").value = result.target_platform;
+        if (result.keywords) $("#articleKeywords").value = result.keywords;
+        if (result.tags) $("#articleTags").value = result.tags;
+        if (result.image_prompt) $("#articleImage").value = result.image_prompt;
+        if (result.risk_notes) $("#articleRisk").value = result.risk_notes;
+        renderPreview();
+        toast(`已适配「${platform.name}」版本，请检查后保存`, "success");
+      } catch (err) {
+        toast("适配失败：" + err.message, "error");
+      } finally {
+        setLoading(btn, false);
+      }
+    });
   });
+
+  // Workshop 子菜单切换（已统一为 sub-tab）
+  $$(".sub-tab[data-tab='generated'], .sub-tab[data-tab='generate']").forEach(tab =>
+    tab.addEventListener("click", () => switchSubTab(tab.dataset.tab))
+  );
 
   // --- Articles ---
   $("#newArticleBtn").addEventListener("click", () => {
     state.selectedArticleId = null;
-    state.selectedArticleProductId = null;
     clearArticleDraft();
     ["articleId", "articleTitle", "articleSummary", "articleBody", "articleType", "articlePlatform", "articleKeywords", "articleTags", "articleImage", "articleRisk"].forEach(id => $(`#${id}`).value = "");
     $("#articleProduct").value = "0";
@@ -405,7 +729,7 @@ function bindEvents() {
     renderArticles();
   });
 
-  // Markdown 工具栏
+  // Markdown 工具栏（文章编辑器）
   $$(".md-btn").forEach(btn => btn.addEventListener("click", () => {
     const textarea = $("#articleBody");
     const md = btn.dataset.md;
@@ -427,37 +751,52 @@ function bindEvents() {
   }));
 
   $("#saveArticleBtn").addEventListener("click", async () => {
-    const id = Number($("#articleId").value);
-    const payload = {
-      product_id: Number($("#articleProduct").value) || 0,
-      geo_question_id: Number($("#articleGeoQuestion").value) || 0,
-      title: $("#articleTitle").value,
-      summary: $("#articleSummary").value,
-      body: $("#articleBody").value,
-      content_type: $("#articleType").value,
-      target_platform: $("#articlePlatform").value,
-      keywords: $("#articleKeywords").value,
-      tags: $("#articleTags").value,
-      image_prompt: $("#articleImage").value,
-      risk_notes: $("#articleRisk").value,
-      status: $("#articleStatus").value,
-    };
-    const errors = validateArticle(payload);
-    if (errors.length) {
-      toast(errors.join("；"), "error");
-      return;
+    try {
+      const id = $("#articleId").value;
+      const oldStatus = id ? (state.articles.find(a => a.id === id)?.status || "draft") : "draft";
+      const payload = {
+        product_id: $("#articleProduct").value || "",
+        geo_question_id: $("#articleGeoQuestion").value || "",
+        title: $("#articleTitle").value,
+        summary: $("#articleSummary").value,
+        body: $("#articleBody").value,
+        content_type: $("#articleType").value,
+        target_platform: $("#articlePlatform").value,
+        keywords: $("#articleKeywords").value,
+        tags: $("#articleTags").value,
+        image_prompt: $("#articleImage").value,
+        risk_notes: $("#articleRisk").value,
+        status: $("#articleStatus").value,
+      };
+      const errors = validateArticle(payload);
+      if (errors.length) {
+        toast(errors.join("；"), "error");
+        return;
+      }
+
+      let articleId = id;
+      if (id) {
+        await api(`/api/articles/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        const article = await api("/api/articles", { method: "POST", body: JSON.stringify(payload) });
+        articleId = article.id;
+        state.selectedArticleId = articleId;
+        // 把新分配的 id 写回表单，避免重复创建
+        $("#articleId").value = articleId;
+      }
+
+      // 工作流自动化：文章状态变为 "approved" 时，自动创建发布任务
+      if (payload.status === "approved" && oldStatus !== "approved" && articleId) {
+        await autoCreatePublishTasks(articleId, payload.product_id, payload.target_platform);
+      }
+
+      clearArticleDraft();
+      toast("文章已保存", "success");
+      setArticleEditorMode(true);
+      await load();
+    } catch (e) {
+      toast("保存失败：" + e.message, "error");
     }
-    if (id) {
-      await api(`/api/articles/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-    } else {
-      const article = await api("/api/articles", { method: "POST", body: JSON.stringify(payload) });
-      state.selectedArticleId = article.id;
-      state.selectedArticleProductId = article.product_id;
-    }
-    clearArticleDraft();
-    toast("文章已保存", "success");
-    setArticleEditorMode(true);
-    await load();
   });
 
   $("#copyArticleBtn").addEventListener("click", async () => {
@@ -498,13 +837,13 @@ function bindEvents() {
     const btn = $("#generateImageBtn");
     if (isLoading(btn)) return;
     let prompt = ($("#articleImage").value || "").trim();
-    const articleId = Number($("#articleId").value);
+    const articleId = ($("#articleId").value);
     if (!prompt && articleId) {
       const article = state.articles.find(a => a.id === articleId);
       prompt = article ? ((article.image_prompt || "") || (article.title || "") + "。" + (article.summary || "")) : "";
     }
     if (!prompt) return toast("请先填写配图建议或选择文章", "error");
-    if (!state.ai_settings?.image_model) return toast("请先在「内容生成 → AI 设置」中配置图片生成模型", "error");
+    if (!state.ai_settings?.image_model) return toast("请先在「AI 设置」中配置图片生成模型", "error");
     setLoading(btn);
     toast("正在生成配图，可能需要几十秒...");
     try {
@@ -519,19 +858,23 @@ function bindEvents() {
   });
 
   $("#deleteArticleBtn")?.addEventListener("click", async () => {
-    const id = Number($("#articleId").value);
+    const id = ($("#articleId").value);
     if (!id) return toast("请先选择文章", "error");
     if (!confirm("确定删除该文章？")) return;
-    await api(`/api/articles/${id}`, { method: "DELETE" });
-    clearArticleDraft();
-    state.selectedArticleId = null;
-    ["articleId", "articleTitle", "articleSummary", "articleBody", "articleType", "articlePlatform", "articleKeywords", "articleTags", "articleImage", "articleRisk"].forEach(id => $(`#${id}`).value = "");
-    $("#articleProduct").value = "0";
-    $("#articleGeoQuestion").value = "0";
-    $("#articleStatus").value = "draft";
-    setArticleEditorMode(false);
-    toast("文章已删除", "success");
-    await load();
+    try {
+      await api(`/api/articles/${id}`, { method: "DELETE" });
+      clearArticleDraft();
+      state.selectedArticleId = null;
+      ["articleId", "articleTitle", "articleSummary", "articleBody", "articleType", "articlePlatform", "articleKeywords", "articleTags", "articleImage", "articleRisk"].forEach(id => $(`#${id}`).value = "");
+      $("#articleProduct").value = "0";
+      $("#articleGeoQuestion").value = "0";
+      $("#articleStatus").value = "draft";
+      setArticleEditorMode(false);
+      toast("文章已删除", "success");
+      await load();
+    } catch (e) {
+      toast("删除失败：" + e.message, "error");
+    }
   });
 
   $("#articleBody")?.addEventListener("input", debounce(renderPreview, 300));
@@ -548,8 +891,8 @@ function bindEvents() {
     // 切换关联产品时，重新加载该产品下的 GEO 问题选项
     const agEl = $("#articleGeoQuestion");
     if (!agEl) return;
-    const productId = Number($("#articleProduct").value || 0);
-    const qs = state.geo_questions.filter(q => !productId || q.product_id === productId);
+    const productId = $("#articleProduct").value || "";
+    const qs = state.geo_questions.filter(q => !productId || String(q.product_id) === productId);
     const cur = agEl.value;
     agEl.innerHTML = `<option value="0">未关联（不影响覆盖率统计）</option>` +
       qs.map(q => `<option value="${q.id}">${escapeHtml(q.question)}</option>`).join("");
@@ -560,40 +903,55 @@ function bindEvents() {
   // --- Platforms ---
   $("#platformSearch").addEventListener("input", debounce(renderPlatforms, 200));
   $("#taskSearch").addEventListener("input", debounce(renderTasks, 200));
-  $("#taskBoardViewBtn")?.addEventListener("click", () => { state.taskView = "board"; renderTasks(); });
-  $("#taskCalendarViewBtn")?.addEventListener("click", () => { state.taskView = "calendar"; renderTasks(); });
+
+  // 发布记录子菜单切换 + 看板统计筛选
+  $$(".sub-tab[data-tab='task-calendar'], .sub-tab[data-tab='task-board'], .sub-tab[data-tab='task-publish']").forEach(tab =>
+    tab.addEventListener("click", () => switchSubTab(tab.dataset.tab))
+  );
+  $("#taskStatProduct")?.addEventListener("change", () => { renderTaskBoardStats(); renderTaskBoard(); });
+  $("#taskStatPlatform")?.addEventListener("change", () => { renderTaskBoardStats(); renderTaskBoard(); });
 
   $("#articleSearch")?.addEventListener("input", debounce(renderArticles, 200));
   $("#articleFilterProduct")?.addEventListener("change", renderArticles);
   $("#articleFilterStatus")?.addEventListener("change", renderArticles);
 
+  // 平台子菜单切换
+  $$(".sub-tab[data-tab='platform-list'], .sub-tab[data-tab='platform-add']").forEach(tab =>
+    tab.addEventListener("click", () => switchSubTab(tab.dataset.tab))
+  );
+
   $("#platformForm").addEventListener("submit", async event => {
     event.preventDefault();
-    const id = Number($("#platformId").value);
-    const payload = {
-      name: $("#platformName").value,
-      category: $("#platformCategory").value,
-      url: $("#platformUrl").value,
-      account_name: $("#platformAccountName").value,
-      login_notes: $("#platformLoginNotes").value,
-      content_style: $("#platformContentStyle").value,
-      recommended_words: $("#platformWords").value,
-      frequency: $("#platformFrequency").value,
-      title_style: $("#platformTitleStyle").value,
-      tags_rule: $("#platformTagsRule").value,
-      allows_external_links: $("#platformLinks").value,
-      soft_article_fit: $("#platformFit").value,
-      status: $("#platformStatus").value,
-      notes: $("#platformNotes").value,
-    };
-    if (id) {
-      await api(`/api/platforms/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-    } else {
-      await api("/api/platforms", { method: "POST", body: JSON.stringify(payload) });
+    try {
+      const id = $("#platformId").value;
+      const payload = {
+        name: $("#platformName").value,
+        category: $("#platformCategory").value,
+        url: $("#platformUrl").value,
+        account_name: $("#platformAccountName").value,
+        login_notes: $("#platformLoginNotes").value,
+        content_style: $("#platformContentStyle").value,
+        recommended_words: $("#platformWords").value,
+        frequency: $("#platformFrequency").value,
+        title_style: $("#platformTitleStyle").value,
+        tags_rule: $("#platformTagsRule").value,
+        allows_external_links: $("#platformLinks").value,
+        soft_article_fit: $("#platformFit").value,
+        status: $("#platformStatus").value,
+        notes: $("#platformNotes").value,
+      };
+      if (id) {
+        await api(`/api/platforms/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await api("/api/platforms", { method: "POST", body: JSON.stringify(payload) });
+      }
+      toast("平台已保存", "success");
+      resetPlatformForm();
+      switchSubTab("platform-list");
+      await load();
+    } catch (e) {
+      toast("保存失败：" + e.message, "error");
     }
-    toast("平台已保存", "success");
-    resetPlatformForm();
-    await load();
   });
   $("#resetPlatformBtn").addEventListener("click", () => {
     if ($("#platformName").value && !confirm("确定清空当前表单？")) return;
@@ -608,12 +966,68 @@ function bindEvents() {
     const article_ids = selectedValues("#taskArticlePicker");
     const platform_ids = selectedValues("#taskPlatformPicker");
     if (!article_ids.length || !platform_ids.length) return toast("请选择文章和平台", "error");
-    const data = await api("/api/tasks/assign", { method: "POST", body: JSON.stringify({ article_ids, platform_ids }) });
-    const msg = data.skipped > 0
-      ? `新增 ${data.created.length} 个任务（跳过 ${data.skipped} 个已存在）`
-      : `新增 ${data.created.length} 个发布任务`;
-    toast(msg, "success");
-    await load();
+    try {
+      const data = await api("/api/tasks/assign", { method: "POST", body: JSON.stringify({ article_ids, platform_ids }) });
+      const msg = data.skipped.length > 0
+        ? `新增 ${data.created.length} 个任务（跳过 ${data.skipped.length} 个已存在）`
+        : `新增 ${data.created.length} 个发布任务`;
+      toast(msg, "success");
+      await load();
+    } catch (e) {
+      toast("分配失败：" + e.message, "error");
+    }
+  });
+
+  // 新建发布记录表单
+  $("#taskFormProduct")?.addEventListener("change", () => {
+    // 产品变化时，重置内容选择并按产品过滤
+    const aEl = $("#taskFormArticle");
+    if (aEl) aEl.value = "";
+    renderTaskForm();
+  });
+  $("#taskFormPlatform")?.addEventListener("change", () => {
+    // 自动填充发布链接为平台 URL（仅当链接为空时）
+    const urlEl = $("#taskFormUrl");
+    if (urlEl && !urlEl.value.trim()) {
+      const pid = $("#taskFormPlatform").value;
+      const p = state.platforms.find(x => String(x.id) === String(pid));
+      if (p?.url) urlEl.value = p.url;
+    }
+  });
+  $("#openTaskPlatformBtn")?.addEventListener("click", () => {
+    const pid = $("#taskFormPlatform").value;
+    const p = state.platforms.find(x => String(x.id) === String(pid));
+    if (p?.url) window.open(p.url, "_blank");
+    else toast("请先选择平台", "error");
+  });
+  $("#resetTaskBtn")?.addEventListener("click", () => {
+    ["taskFormProduct", "taskFormArticle", "taskFormPlatform", "taskFormUrl", "taskFormNotes"].forEach(id => $(`#${id}`).value = "");
+    $("#taskFormStatus").value = "todo";
+    renderTaskForm();
+  });
+  $("#saveTaskBtn")?.addEventListener("click", async () => {
+    const articleId = $("#taskFormArticle").value;
+    const platformId = $("#taskFormPlatform").value;
+    if (!articleId) return toast("请选择发布内容", "error");
+    if (!platformId) return toast("请选择发布平台", "error");
+    const status = $("#taskFormStatus").value;
+    const payload = {
+      article_id: String(articleId),
+      platform_id: String(platformId),
+      status,
+      published_url: $("#taskFormUrl").value.trim(),
+      notes: $("#taskFormNotes").value.trim(),
+    };
+    if (status === "published" && !payload.published_at) payload.published_at = formatLocalNow();
+    try {
+      await api("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
+      toast("发布记录已保存", "success");
+      ["taskFormProduct", "taskFormArticle", "taskFormPlatform", "taskFormUrl", "taskFormNotes"].forEach(id => $(`#${id}`).value = "");
+      $("#taskFormStatus").value = "todo";
+      await load();
+    } catch (e) {
+      toast("保存失败：" + e.message, "error");
+    }
   });
 
   // --- Global Search ---
@@ -696,8 +1110,11 @@ function navigateToSearchResult(item) {
   $("#globalSearch").value = "";
   $("#globalSearchResults").style.display = "none";
   if (item.type === "product") { showView("products"); selectProduct(item.id); }
-  else if (item.type === "geo_question") { showView("geo"); selectGeoQuestion(item.id); }
-  else if (item.type === "article") { showView("articles"); selectArticle(item.id); }
+  else if (item.type === "geo_question") {
+    const q = state.geo_questions.find(x => x.id === item.id);
+    if (q) showProductDetail(q.product_id, "geo");
+  }
+  else if (item.type === "article") { showView("workshop"); selectArticle(item.id); }
   else if (item.type === "platform") { showView("platforms"); selectPlatform(item.id); }
   else if (item.type === "task") { showView("tasks"); }
 }
@@ -746,29 +1163,7 @@ function bindGlobalSearchEvents() {
 document.addEventListener("click", handleDelegatedClick);
 
 // --- Keyboard Shortcuts ---
-document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.metaKey) {
-    if (e.key === "s") {
-      e.preventDefault();
-      const activeView = $(".view.active");
-      if (activeView?.id === "articles") {
-        $("#saveArticleBtn").click();
-      } else if (activeView?.id === "products") {
-        $("#saveProductBtn").click();
-      }
-    }
-    // Ctrl+L 刷新数据（避免与浏览器 Ctrl+R 刷新冲突）
-    if (e.key === "l") {
-      e.preventDefault();
-      load();
-    }
-    // Cmd/Ctrl+K 聚焦全局搜索
-    if (e.key === "k") {
-      e.preventDefault();
-      $("#globalSearch")?.focus();
-    }
-  }
-});
+// 注意：Ctrl+K / Ctrl+N / Ctrl+D 等快捷键由 enhancements.js 的 initShortcuts 统一处理
 }
 
 // --- Event Delegation Handler ---
@@ -795,7 +1190,7 @@ async function handleDelegatedClick(e) {
   // 文章列表行点击（无需 button 触发）
   const articleRow = el.closest(".article-row");
   if (articleRow) {
-    selectArticle(Number(articleRow.dataset.id));
+    selectArticle(articleRow.dataset.id);
     return;
   }
 
@@ -806,11 +1201,35 @@ async function handleDelegatedClick(e) {
     return;
   }
 
-  // Calendar task click
+  // GEO 问题空状态：展开新增表单
+  const toggleGeoBtn = el.closest("[data-action='toggle-geo-form']");
+  if (toggleGeoBtn) {
+    resetGeoQuestionForm();
+    $("#geoQuestionForm").style.display = "";
+    $("#geoQuestionText")?.focus();
+    return;
+  }
+
+  // 平台空状态：跳到新增平台 Tab
+  const switchPlatformAddBtn = el.closest("[data-action='switch-platform-add']");
+  if (switchPlatformAddBtn) {
+    resetPlatformForm();
+    switchSubTab("platform-add");
+    return;
+  }
+
+  // 产品空状态：跳到新增产品 Tab
+  const switchProductAddBtn = el.closest("[data-action='switch-product-add']");
+  if (switchProductAddBtn) {
+    resetProductForm();
+    switchSubTab("product-add");
+    return;
+  }
+
+  // Calendar task click → 切换到看板视图
   const calTask = el.closest(".calendar-task");
   if (calTask && calTask.dataset.id) {
-    state.taskView = "board";
-    renderTasks();
+    switchSubTab("task-board");
     return;
   }
 
@@ -819,93 +1238,174 @@ async function handleDelegatedClick(e) {
   // Product list actions
   if (btn.classList.contains("edit-product")) {
     e.stopPropagation();
-    selectProduct(Number(btn.dataset.id));
+    selectProduct(btn.dataset.id);
     return;
   }
   if (btn.classList.contains("use-product")) {
     e.stopPropagation();
-    showView("generator");
-    $("#genProduct").value = btn.dataset.id;
+    showView("workshop");
+    const wp = $("#workshopProduct");
+    if (wp) wp.value = btn.dataset.id;
     return;
   }
   if (btn.classList.contains("delete-product")) {
     e.stopPropagation();
-    if (!confirm("确定删除该产品？")) return;
-    await api(`/api/products/${btn.dataset.id}`, { method: "DELETE" });
-    toast("产品已删除", "success");
-    await load();
+    if (!confirm("确定删除该产品？相关数据不会删除。")) return;
+    try {
+      await api(`/api/products/${btn.dataset.id}`, { method: "DELETE" });
+      toast("产品已删除", "success");
+      await load();
+    } catch (e) { toast("删除失败：" + e.message, "error"); }
+    return;
+  }
+
+  // Product detail open (from product list or stat cards)
+  if (btn.classList.contains("open-product-detail")) {
+    e.stopPropagation();
+    showProductDetail(btn.dataset.id);
+    return;
+  }
+  if (btn.classList.contains("open-product-geo")) {
+    e.stopPropagation();
+    showProductDetail(btn.dataset.id, "geo");
+    return;
+  }
+
+  // Matrix action buttons
+  if (btn.classList.contains("matrix-generate")) {
+    e.stopPropagation();
+    const productId = btn.dataset.productId;
+    const platform = btn.dataset.platform;
+    showView("workshop");
+    if (productId) {
+      $("#workshopProduct").value = productId;
+      $("#workshopProduct").dispatchEvent(new Event("change"));
+    }
+    if (platform) {
+      const cb = $(`#workshop .workshop-platforms input[value="${escapeHtml(platform)}"]`);
+      if (cb) cb.checked = true;
+    }
+    return;
+  }
+
+  if (btn.classList.contains("matrix-view-content")) {
+    e.stopPropagation();
+    const productId = btn.dataset.productId;
+    const platform = btn.dataset.platform;
+    showView("workshop");
+    if (productId) $("#articleFilterProduct").value = productId;
+    if (platform) $("#articleSearch").value = platform;
+    renderArticles();
     return;
   }
 
   // GEO question actions
   if (btn.classList.contains("edit-geo-question")) {
-    selectGeoQuestion(Number(btn.dataset.id));
+    selectGeoQuestion(btn.dataset.id);
     return;
   }
   if (btn.classList.contains("cover-geo-question")) {
-    await api(`/api/geo_questions/${btn.dataset.id}`, { method: "PUT", body: JSON.stringify({ status: "covered" }) });
-    toast("已标记为覆盖", "success");
-    await load();
+    try {
+      await api(`/api/geo_questions/${btn.dataset.id}`, { method: "PUT", body: JSON.stringify({ status: "covered" }) });
+      toast("已标记为覆盖", "success");
+      await load();
+    } catch (e) { toast("操作失败：" + e.message, "error"); }
     return;
   }
   if (btn.classList.contains("delete-geo-question")) {
     if (!confirm("确定删除这个 GEO 问题？")) return;
-    await api(`/api/geo_questions/${btn.dataset.id}`, { method: "DELETE" });
-    toast("GEO 问题已删除", "success");
-    await load();
+    try {
+      await api(`/api/geo_questions/${btn.dataset.id}`, { method: "DELETE" });
+      toast("GEO 问题已删除", "success");
+      await load();
+    } catch (e) { toast("删除失败：" + e.message, "error"); }
     return;
   }
 
   // Platform actions
   if (btn.classList.contains("open-platform")) {
-    window.open(btn.dataset.url, "_blank");
+    if (btn.dataset.url) window.open(btn.dataset.url, "_blank");
+    else toast("该平台未配置发布入口链接", "error");
     return;
   }
   if (btn.classList.contains("edit-platform")) {
-    selectPlatform(Number(btn.dataset.id));
+    selectPlatform(btn.dataset.id);
     return;
   }
   if (btn.classList.contains("toggle-platform")) {
-    await api(`/api/platforms/${btn.dataset.id}`, { method: "PUT", body: JSON.stringify({ status: btn.dataset.status }) });
-    await load();
+    try {
+      await api(`/api/platforms/${btn.dataset.id}`, { method: "PUT", body: JSON.stringify({ status: btn.dataset.status }) });
+      await load();
+    } catch (e) { toast("操作失败：" + e.message, "error"); }
     return;
   }
   if (btn.classList.contains("delete-platform")) {
     if (!confirm("确定删除该平台？")) return;
-    await api(`/api/platforms/${btn.dataset.id}`, { method: "DELETE" });
-    toast("平台已删除", "success");
-    await load();
+    try {
+      await api(`/api/platforms/${btn.dataset.id}`, { method: "DELETE" });
+      toast("平台已删除", "success");
+      await load();
+    } catch (e) { toast("删除失败：" + e.message, "error"); }
     return;
   }
 
   // Task actions
   if (btn.classList.contains("task-status")) {
     const id = btn.dataset.id;
-    const body = { status: btn.dataset.status };
+    const newStatus = btn.dataset.status;
+    const task = state.tasks.find(t => t.id === id);
+    const wasPublished = task?.status === "published";
+    const body = { status: newStatus };
     const urlInput = $(`#publishedUrl-${id}`);
     if (urlInput) body.published_url = urlInput.value;
-    if (btn.dataset.status === "published" && !body.published_at) body.published_at = formatLocalNow();
-    await api(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify(body) });
-    toast("发布状态已更新", "success");
-    await load();
+    const isNewPublish = newStatus === "published" && !wasPublished;
+    if (newStatus === "published" && !body.published_at) body.published_at = formatLocalNow();
+    try {
+      await api(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify(body) });
+      if (isNewPublish) {
+        toast("🎉 发布成功！内容已记录，别忘了分享哦～", "celebrate");
+      } else if (newStatus === "revise") {
+        toast("已标记为需修改", "warning");
+      } else if (newStatus === "skipped") {
+        toast("已跳过该任务", "info");
+      } else {
+        toast("状态已更新", "success");
+      }
+      await load();
+    } catch (e) { toast("操作失败：" + e.message, "error"); }
     return;
   }
   if (btn.classList.contains("task-open")) {
-    window.open(btn.dataset.url, "_blank");
+    const url = btn.dataset.url;
+    if (url) window.open(url, "_blank");
+    else toast("该平台未配置发布入口链接", "error");
     return;
   }
   if (btn.classList.contains("task-copy")) {
-    const task = state.tasks.find(item => item.id === Number(btn.dataset.id));
+    const task = state.tasks.find(item => item.id === btn.dataset.id);
     if (!task) return;
-    await copyToClipboard(taskCopyText(task, btn.dataset.kind));
-    toast("发布素材已复制", "success");
+    const text = taskCopyText(task, btn.dataset.kind);
+    await copyToClipboard(text);
+    if (btn.dataset.kind === "share") {
+      toast("分享链接已复制！快去分享吧 ✨", "celebrate");
+    } else {
+      toast("发布素材已复制", "success");
+    }
+    return;
+  }
+  if (btn.classList.contains("task-share-card")) {
+    if (typeof showShareCard === "function") {
+      showShareCard(btn.dataset.id);
+    }
     return;
   }
   if (btn.classList.contains("task-delete")) {
     if (!confirm("确定删除该任务？")) return;
-    await api(`/api/tasks/${btn.dataset.id}`, { method: "DELETE" });
-    toast("任务已删除", "success");
-    await load();
+    try {
+      await api(`/api/tasks/${btn.dataset.id}`, { method: "DELETE" });
+      toast("任务已删除", "success");
+      await load();
+    } catch (e) { toast("删除失败：" + e.message, "error"); }
     return;
   }
 
@@ -921,4 +1421,765 @@ async function handleDelegatedClick(e) {
     return;
   }
 
+  // --- User Model actions ---
+  if (btn.classList.contains("edit-user-model")) {
+    selectUserModel(btn.dataset.id);
+    return;
+  }
+  if (btn.classList.contains("use-user-model")) {
+    applyUserModelToSettings(btn.dataset.id);
+    return;
+  }
+  if (btn.classList.contains("delete-user-model")) {
+    if (!confirm("确定删除该自定义模型？")) return;
+    api(`/api/user_models/${btn.dataset.id}`, { method: "DELETE" }).then(() => {
+      toast("模型已删除", "success");
+      load();
+    });
+    return;
+  }
+}
+
+// ===== Product Detail Helpers ============================================
+
+function ensurePdIdInput() {
+  let el = $("#pdId");
+  if (!el) {
+    el = document.createElement("input");
+    el.type = "hidden";
+    el.id = "pdId";
+    const meta = document.querySelector("#productDetail .product-meta");
+    if (meta) meta.appendChild(el);
+  }
+  return el;
+}
+
+function showProductDetail(id, tab = "profile") {
+  const product = state.products.find(p => p.id === id);
+  if (!product) return;
+  ensurePdIdInput().value = product.id;
+  $("#pdName").value = product.name || "";
+  $("#pdType").value = product.type || "";
+  $("#pdUrl").value = product.url || "";
+  $("#pdStatus").value = product.status || "active";
+  $("#pdMarkdown").value = product.description || product.markdown || "";
+  // 切到指定 Tab
+  $$(".pd-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
+  $$(".pd-tab-panel").forEach(p => p.classList.remove("active"));
+  (tab === "geo" ? $("#pdTabGeo") : $("#pdTabProfile")).classList.add("active");
+  // 重置 GEO 问题表单
+  $("#geoQuestionForm").style.display = "none";
+  resetGeoQuestionForm();
+  if ($("#geoSearch")) $("#geoSearch").value = "";
+  showView("productDetail");
+  updateProductMdPreview();
+  renderProductImages(id);
+  renderGeoQuestions();
+  // 切换产品时重置保存状态
+  _pdSaving = false;
+  setPdSaveStatus("idle");
+  // 重置聊天消息
+  const chatBox = $("#pdChatMessages");
+  if (chatBox) {
+    chatBox.innerHTML = "";
+    addChatMessage("assistant", `你好！我是 AI 助手，可以帮助你优化「${escapeHtml(product.name || "此产品")}」的介绍。\n\n你可以：
+• 请我润色某段文字
+• 补充产品亮点
+• 优化 Markdown 排版
+• 根据目标用户调整语气`);
+  }
+}
+
+function updateProductMdPreview() {
+  const md = ($("#pdMarkdown")?.value || "").trim();
+  const preview = $("#pdPreview");
+  if (preview) preview.innerHTML = markdownToHtml(md);
+}
+
+// 产品详情页保存状态指示
+const PD_SAVE_LABELS = {
+  idle: "未修改",
+  dirty: "有修改…",
+  saving: "保存中…",
+  saved: "已保存",
+  error: "保存失败",
+};
+let _pdSaving = false; // 防止并发保存
+function setPdSaveStatus(state) {
+  const el = $("#pdSaveStatus");
+  if (!el) return;
+  el.dataset.state = state;
+  el.textContent = PD_SAVE_LABELS[state] || "";
+}
+// 统一的产品保存函数：支持全字段保存或仅描述保存
+async function saveProductFromForm({ showToast = false, silent = false, onlyDescription = false } = {}) {
+  if (_pdSaving) return;
+  const id = ($("#pdId")?.value) || "";
+  const payload = onlyDescription
+    ? { description: $("#pdMarkdown")?.value || "" }
+    : {
+        name: $("#pdName")?.value || "",
+        type: $("#pdType")?.value || "",
+        url: $("#pdUrl")?.value || "",
+        status: $("#pdStatus")?.value || "active",
+        description: $("#pdMarkdown")?.value || "",
+      };
+  if (!id && onlyDescription) return; // 新建未保存时不自动保存
+  setPdSaveStatus("saving");
+  _pdSaving = true;
+  try {
+    if (id) {
+      await api(`/api/products/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      const created = await api("/api/products", { method: "POST", body: JSON.stringify(payload) });
+      if (created && created.id) ensurePdIdInput().value = created.id;
+    }
+    setPdSaveStatus("saved");
+    if (showToast) toast("产品已保存", "success");
+    // 2.5s 后回到 idle，给用户留反馈时间
+    setTimeout(() => {
+      const el = $("#pdSaveStatus");
+      if (el && el.dataset.state === "saved") setPdSaveStatus("idle");
+    }, 2500);
+    // 静默保存时也刷新列表数据，但用低优先级避免抖动
+    if (!silent) await load();
+  } catch (err) {
+    setPdSaveStatus("error");
+    if (showToast) toast("保存失败：" + err.message, "error");
+    else toast("自动保存失败：" + err.message, "error");
+  } finally {
+    _pdSaving = false;
+  }
+}
+
+// 将 AI 生成的内容填入文章编辑器，并自动补全标题/类型/平台/产品关联
+function applyWorkshopResult(raw, productId, types, platforms) {
+  const body = String(raw || "").trim();
+  const titleEl = $("#articleTitle");
+  const bodyEl = $("#articleBody");
+  bodyEl.value = body;
+  // 自动补全标题（保留用户已填则不覆盖）
+  if (!titleEl.value.trim()) {
+    const hMatch = body.match(/^#+\s+(.+)$/m);
+    if (hMatch) titleEl.value = hMatch[1].trim();
+    else {
+      const firstLine = body.split("\n")[0].trim();
+      if (firstLine) titleEl.value = firstLine.slice(0, 60);
+    }
+  }
+  if (productId) $("#articleProduct").value = String(productId);
+  if (types && types.length && !$("#articleType").value.trim()) {
+    $("#articleType").value = types.join(",");
+  }
+  if (platforms && platforms.length && !$("#articlePlatform").value.trim()) {
+    $("#articlePlatform").value = platforms.join(",");
+  }
+  setArticleEditorMode(true);
+  renderPreview();
+  renderArticles();
+  // 生成后切到「已生成」Tab 让用户检查并保存
+  switchWorkshopTab("generated");
+  bodyEl.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// 通用子菜单切换：支持 products / platforms / workshop / tasks
+// tabName 形如 "product-list" / "product-add" / "platform-list" / "platform-add" 等
+function switchSubTab(tabName) {
+  $$(".sub-tab").forEach(t => {
+    t.classList.toggle("active", t.dataset.tab === tabName);
+  });
+  $$(".sub-tab-panel").forEach(p => {
+    p.classList.toggle("active", p.dataset.panel === tabName);
+  });
+}
+// Workshop Tab 子菜单切换（保留兼容）
+function switchWorkshopTab(tabName) { switchSubTab(tabName); }
+
+// ===== AI Chat Helpers ===================================================
+
+function sendPdChatMessage() {
+  const input = $("#pdChatInput");
+  if (!input) return;
+  const userMsg = input.value.trim();
+  if (!userMsg) return;
+
+  const productId = ($("#pdId")?.value) || "";
+  const product = productId ? state.products.find(p => p.id === productId) : null;
+  const mdContent = ($("#pdMarkdown")?.value || "").trim();
+
+  addChatMessage("user", userMsg);
+  input.value = "";
+
+  const aiSettings = state.ai_settings || {};
+  if (!aiSettings.text_api_key) {
+    addChatMessage("assistant", "请先在「设置」中配置 AI Key");
+    return;
+  }
+
+  const systemPrompt = `你是产品内容助手，根据以下产品信息帮助用户优化产品介绍。
+
+产品信息：
+- 名称：${product?.name || "未设置"}
+- 类型：${product?.type || ""}
+- 链接：${product?.url || ""}
+- 目标用户：${product?.audience || ""}
+- 核心卖点：${product?.selling_points || ""}
+- 品牌语气：${product?.tone || ""}
+- 禁用表达：${product?.forbidden_words || ""}
+
+当前产品介绍（Markdown）：
+${mdContent || "暂无内容"}
+
+请根据用户的问题，提供优化建议。如果你建议修改 Markdown 内容，请用清晰的格式给出建议。`;
+
+  callAI(aiSettings, [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMsg },
+  ]).then(response => {
+    const hasMarkdown = /```markdown|```md|^#{1,3} |\*\*/.test(response);
+    addChatMessage("assistant", response, hasMarkdown);
+  }).catch(err => {
+    addChatMessage("assistant", `错误：${err.message}`);
+  });
+}
+
+function addChatMessage(role, text, hasApply = false) {
+  const container = $("#pdChatMessages");
+  if (!container) return;
+
+  const msgDiv = document.createElement("div");
+  msgDiv.className = `ai-chat-msg ${role}`;
+
+  const content = document.createElement("div");
+  content.className = "ai-chat-msg-content";
+  content.innerHTML = markdownToHtml(text);
+  msgDiv.appendChild(content);
+
+  if (role === "assistant" && hasApply) {
+    const applyBtn = document.createElement("button");
+    applyBtn.className = "btn ghost sm ai-chat-apply-btn";
+    applyBtn.textContent = "应用到产品介绍";
+    applyBtn.addEventListener("click", () => {
+      let mdText = text;
+      const mdMatch = text.match(/```(?:markdown|md)?\s*\n([\s\S]*?)```/);
+      if (mdMatch) {
+        mdText = mdMatch[1].trim();
+      }
+      $("#pdMarkdown").value = mdText;
+      updateProductMdPreview();
+      toast("已应用到产品介绍", "success");
+    });
+    msgDiv.appendChild(applyBtn);
+  }
+
+  container.appendChild(msgDiv);
+  container.scrollTop = container.scrollHeight;
+}
+
+// ===== Workshop Helpers ==================================================
+
+// 平台选择模态框
+function showPlatformSelectModal(platforms, onSelect) {
+  const modal = $("#platformSelectModal");
+  const list = $("#platformSelectList");
+  const search = $("#platformSelectSearch");
+  const closeBtn = $("#platformSelectClose");
+
+  if (!modal || !list) return;
+
+  // 渲染平台列表
+  function renderPlatformList(filter = "") {
+    const filtered = filter
+      ? platforms.filter(p => p.name.toLowerCase().includes(filter.toLowerCase()) || (p.category || "").toLowerCase().includes(filter.toLowerCase()))
+      : platforms;
+
+    list.innerHTML = filtered.map(p => `
+      <div class="platform-select-item" data-id="${p.id}">
+        <span class="platform-select-item-name">${escapeHtml(p.name)}</span>
+        <span class="platform-select-item-category">${escapeHtml(p.category || "")}</span>
+      </div>
+    `).join("");
+
+    // 绑定点击事件
+    list.querySelectorAll(".platform-select-item").forEach(el => {
+      el.addEventListener("click", () => {
+        const platformId = el.dataset.id;
+        const platform = platforms.find(p => p.id === platformId);
+        if (platform) {
+          modal.style.display = "none";
+          onSelect(platform);
+        }
+      });
+    });
+  }
+
+  // 初始渲染
+  renderPlatformList();
+
+  // 搜索功能
+  search.value = "";
+  search.oninput = () => renderPlatformList(search.value);
+
+  // 关闭按钮
+  closeBtn.onclick = () => { modal.style.display = "none"; };
+
+  // 点击背景关闭
+  modal.onclick = (e) => {
+    if (e.target === modal) modal.style.display = "none";
+  };
+
+  // 显示模态框
+  modal.style.display = "flex";
+  search.focus();
+}
+
+// 工作流自动化：文章状态变为 "approved" 时，自动创建发布任务
+async function autoCreatePublishTasks(articleId, productId, targetPlatform) {
+  try {
+    // 获取已启用的平台
+    const enabledPlatforms = state.platforms.filter(p => p.status === "enabled");
+    if (!enabledPlatforms.length) return;
+
+    // 如果文章指定了目标平台，只创建该平台的任务
+    let platformsToAssign = enabledPlatforms;
+    if (targetPlatform) {
+      const matchedPlatform = enabledPlatforms.find(p => p.name === targetPlatform);
+      if (matchedPlatform) {
+        platformsToAssign = [matchedPlatform];
+      }
+    }
+
+    // 获取现有任务，避免重复创建
+    const existingTasks = state.tasks || [];
+    const articleTasks = existingTasks.filter(t => String(t.article_id) === String(articleId));
+    const existingPlatformIds = new Set(articleTasks.map(t => String(t.platform_id)));
+
+    // 创建新任务
+    let created = 0;
+    for (const platform of platformsToAssign) {
+      if (existingPlatformIds.has(String(platform.id))) continue;
+
+      try {
+        await api("/api/tasks", {
+          method: "POST",
+          body: JSON.stringify({
+            article_id: String(articleId),
+            platform_id: String(platform.id),
+            status: "todo",
+            notes: "文章审核通过，自动创建发布任务",
+          }),
+        });
+        created++;
+      } catch (e) {
+        console.warn("自动创建发布任务失败：", platform.name, e.message);
+      }
+    }
+
+    if (created > 0) {
+      toast(`已自动创建 ${created} 个发布任务`, "success");
+    }
+  } catch (e) {
+    console.warn("自动创建发布任务失败：", e.message);
+  }
+}
+
+function buildWorkshopPrompt(product, types, platforms, notes) {
+  const typesList = types.length ? types.join("、") : "产品软文";
+  const platformsList = platforms.length ? platforms.join("、") : "通用平台";
+
+  return `你是一个专业的中文内容创作者，请根据以下产品信息生成内容。
+
+产品信息：
+- 名称：${product.name || ""}
+- 类型：${product.type || ""}
+- 链接：${product.url || ""}
+- 目标用户：${product.audience || ""}
+- 核心卖点：${product.selling_points || ""}
+- 竞品/替代品：${product.competitors || ""}
+- 品牌语气：${product.tone || ""}
+- 转化目标：${product.goal || ""}
+- 禁用表达：${product.forbidden_words || ""}
+
+内容类型：${typesList}
+目标平台：${platformsList}
+${notes ? `补充说明：${notes}` : ""}
+
+要求：
+1. 生成的内容要适配指定平台和内容类型的风格。
+2. 语言自然、真实，避免广告感。
+3. 不要编造不存在的数据、奖项、用户评价。
+4. 适当使用 Markdown 格式排版（标题、列表、加粗等）。
+5. 输出纯 Markdown 文本，不要 JSON 包装，不要多余解释。`;
+}
+
+async function workshopAiEdit(action) {
+  const body = ($("#articleBody")?.value || "").trim();
+  if (!body) return toast("内容为空", "error");
+
+  const aiSettings = state.ai_settings || {};
+  if (!aiSettings.text_api_key) return toast("请先配置 AI Key", "error");
+
+  // 优先用关联产品；若未关联则回退到工坊选择的产品
+  const articleProductId = ($("#articleProduct")?.value) || "";
+  const workshopProductId = ($("#workshopProduct")?.value) || "";
+  const pid = articleProductId || workshopProductId;
+  const product = pid ? state.products.find(p => p.id === pid) : null;
+
+  const actionLabel = action === "改写" ? "改写" : "扩写";
+  const actionInst = action === "改写"
+    ? "请用不同的表达方式改写以下内容，保留核心信息，提升可读性。"
+    : "请在保留原有信息的基础上进行扩写，丰富细节、案例或论证，使内容更加充实。";
+
+  let systemPrompt = `你是一个专业的中文内容创作者。${actionInst}`;
+  if (product) {
+    systemPrompt += `\n\n产品背景：名称：${product.name}，类型：${product.type}，品牌语气：${product.tone}，禁用表达：${product.forbidden_words}。`;
+  }
+
+  toast(`正在${actionLabel}...`);
+  try {
+    const raw = await callAI(aiSettings, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: body },
+    ]);
+    $("#articleBody").value = raw;
+    renderPreview();
+    toast(`内容已${actionLabel}`, "success");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+// ===== User Model Events =================================================
+
+$("#saveUserModelBtn").addEventListener("click", async () => {
+  const id = $("#umId").value;
+  const payload = {
+    name: $("#umName").value,
+    provider: $("#umProvider").value,
+    text_base_url: $("#umTextBaseUrl").value,
+    text_model: $("#umTextModel").value,
+    text_api_key: $("#umTextApiKey").value,
+    image_base_url: $("#umImageBaseUrl").value,
+    image_model: $("#umImageModel").value,
+    image_api_key: $("#umImageApiKey").value,
+    temperature: Number($("#umTemperature").value || 0.7),
+  };
+  if (!payload.name) return toast("请输入模型名称", "error");
+  if (id) {
+    await api(`/api/user_models/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  } else {
+    await api("/api/user_models", { method: "POST", body: JSON.stringify(payload) });
+  }
+  resetUserModelForm();
+  toast("模型已保存", "success");
+  await load();
+});
+
+// ===== Auth View =========================================================
+
+function showAuthView() {
+  $("#authView").style.display = "flex";
+  $(".sidebar").style.display = "none";
+  $("#sidebarToggle").style.display = "none";
+  $(".user-info").style.display = "none";
+}
+
+function hideAuthView() {
+  $("#authView").style.display = "none";
+  $(".sidebar").style.display = "";
+  $("#sidebarToggle").style.display = "";
+  $(".user-info").style.display = "flex";
+  $("#userNameDisplay").textContent = getCurrentUserName() || "";
+}
+
+function renderAuthView() {
+  if (isLoggedIn()) {
+    hideAuthView();
+    $("#userNameDisplay").textContent = getCurrentUserName() || "";
+  } else {
+    showAuthView();
+  }
+}
+
+// ===== User Model Helpers ================================================
+
+function selectUserModel(id) {
+  const m = state.user_models.find(x => x.id === id);
+  if (!m) return;
+  $("#umId").value = m.id;
+  $("#umName").value = m.name || "";
+  $("#umProvider").value = m.provider || "";
+  $("#umTextBaseUrl").value = m.text_base_url || "";
+  $("#umTextModel").value = m.text_model || "";
+  $("#umTextApiKey").value = ""; // 不回填 Key
+  $("#umImageBaseUrl").value = m.image_base_url || "";
+  $("#umImageModel").value = m.image_model || "";
+  $("#umImageApiKey").value = "";
+  $("#umTemperature").value = m.temperature || 0.7;
+}
+
+function resetUserModelForm() {
+  ["umId", "umName", "umProvider", "umTextBaseUrl", "umTextModel", "umTextApiKey", "umImageBaseUrl", "umImageModel", "umImageApiKey"].forEach(id => $(`#${id}`).value = "");
+  $("#umTemperature").value = 0.7;
+}
+
+function applyUserModelToSettings(id) {
+  const m = state.user_models.find(x => x.id === id);
+  if (!m) return;
+  $("#aiMode").value = "api";
+  $("#textBaseUrl").value = m.text_base_url || "";
+  $("#textModel").value = m.text_model || "";
+  $("#imageBaseUrl").value = m.image_base_url || "";
+  $("#imageModel").value = m.image_model || "";
+  const aiSettings = state.ai_settings || {};
+  const payload = {
+    mode: "api",
+    text_base_url: m.text_base_url || "",
+    text_model: m.text_model || "",
+    image_base_url: m.image_base_url || "",
+    image_model: m.image_model || "",
+    temperature: m.temperature || 0.7,
+  };
+  if (m.text_api_key) payload.text_api_key = m.text_api_key;
+  if (m.image_api_key) payload.image_api_key = m.image_api_key;
+  const recordId = aiSettings.id || null;
+  const req = recordId
+    ? geoApi(`/api/ai_settings/${recordId}`, { method: "PUT", body: JSON.stringify(payload) })
+    : geoApi("/api/ai_settings", { method: "POST", body: JSON.stringify({ ...payload, mode: "api" }) });
+  req.then(() => { toast(`已切换到模型：${m.name}`, "success"); load(); }).catch(err => toast(err.message, "error"));
+}
+
+// ===== Pre-registered Accounts ===========================================
+
+const PRE_REGISTERED_ACCOUNTS = [
+  { name: "用户001", email: "user001@geo.local", password: "test1234" },
+  { name: "用户002", email: "user002@geo.local", password: "test1234" },
+  { name: "用户003", email: "user003@geo.local", password: "test1234" },
+  { name: "用户004", email: "user004@geo.local", password: "test1234" },
+  { name: "用户005", email: "user005@geo.local", password: "test1234" },
+];
+
+function renderAccountChips() {
+  const container = $("#accountChips");
+  if (!container) return;
+  container.innerHTML = PRE_REGISTERED_ACCOUNTS.map(a => `
+    <div class="account-chip" data-email="${escapeHtml(a.email)}" data-password="${escapeHtml(a.password)}">
+      ${escapeHtml(a.name)}
+      <small>${escapeHtml(a.email)}</small>
+    </div>
+  `).join("");
+}
+
+// ===== 引导式向导 =========================================================
+
+const WIZARD_STEPS = [
+  {
+    title: "欢迎使用 GEO Studio",
+    content: `
+      <h3>让 AI 帮你回答用户真正会问的问题</h3>
+      <p>GEO Studio 是一个生成式搜索引擎优化（GEO）内容工作台，帮助你创建被 AI 引用的内容。</p>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">📦</div>
+        <div class="wizard-feature-text">
+          <h4>产品档案</h4>
+          <p>定义你的产品信息，作为内容生成的基础</p>
+        </div>
+      </div>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">❓</div>
+        <div class="wizard-feature-text">
+          <h4>GEO 问题库</h4>
+          <p>收集用户会问 AI 的问题，确保内容覆盖</p>
+        </div>
+      </div>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">✨</div>
+        <div class="wizard-feature-text">
+          <h4>AI 内容生成</h4>
+          <p>基于产品和问题，AI 自动生成高质量内容</p>
+        </div>
+      </div>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">📊</div>
+        <div class="wizard-feature-text">
+          <h4>覆盖率分析</h4>
+          <p>追踪哪些问题已被内容覆盖</p>
+        </div>
+      </div>
+    `,
+    action: null,
+  },
+  {
+    title: "创建你的第一个产品",
+    content: `
+      <h3>从产品档案开始</h3>
+      <p>产品档案是内容生成的基础。填写产品名称、类型、目标用户和核心卖点。</p>
+      <div class="wizard-action" id="wizardCreateProduct">
+        <span class="wizard-action-icon">📦</span>
+        <span class="wizard-action-text">点击这里创建产品档案</span>
+      </div>
+      <p style="margin-top:16px;font-size:12px;color:var(--text-muted)">提示：你也可以在「产品档案」页面随时创建和编辑产品。</p>
+    `,
+    action: () => {
+      showView("products");
+      switchSubTab("product-add");
+    },
+  },
+  {
+    title: "配置 AI 设置",
+    content: `
+      <h3>连接 AI 模型</h3>
+      <p>配置 AI API Key 后，系统可以直接调用大模型生成内容。</p>
+      <div class="wizard-action" id="wizardConfigAI">
+        <span class="wizard-action-icon">⚙️</span>
+        <span class="wizard-action-text">点击这里配置 AI 设置</span>
+      </div>
+      <p style="margin-top:16px;font-size:12px;color:var(--text-muted)">支持智谱 GLM、OpenAI、DeepSeek 等多种模型。</p>
+    `,
+    action: () => {
+      showView("settings");
+    },
+  },
+  {
+    title: "开始使用",
+    content: `
+      <h3>你已准备就绪！</h3>
+      <p>现在你可以开始使用 GEO Studio 了。核心工作流程：</p>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">1</div>
+        <div class="wizard-feature-text">
+          <h4>创建产品档案</h4>
+          <p>填写产品信息，或让 AI 帮你梳理</p>
+        </div>
+      </div>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">2</div>
+        <div class="wizard-feature-text">
+          <h4>生成 GEO 问题</h4>
+          <p>收集用户会问 AI 的问题</p>
+        </div>
+      </div>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">3</div>
+        <div class="wizard-feature-text">
+          <h4>AI 生成内容</h4>
+          <p>在「内容工坊」中选择产品和平台，一键生成</p>
+        </div>
+      </div>
+      <div class="wizard-feature">
+        <div class="wizard-feature-icon">4</div>
+        <div class="wizard-feature-text">
+          <h4>发布并追踪</h4>
+          <p>复制内容到平台发布，记录发布状态</p>
+        </div>
+      </div>
+    `,
+    action: null,
+  },
+];
+
+let wizardCurrentStep = 0;
+
+function initWizard() {
+  // 检查是否已完成引导
+  if (localStorage.getItem("geo_wizard_completed")) return;
+  
+  // 绑定事件
+  $("#wizardNextBtn")?.addEventListener("click", wizardNext);
+  $("#wizardPrevBtn")?.addEventListener("click", wizardPrev);
+  $("#wizardSkipBtn")?.addEventListener("click", wizardSkip);
+  
+  // 显示引导
+  showWizard();
+}
+
+function showWizard() {
+  const overlay = $("#wizardOverlay");
+  if (!overlay) return;
+  overlay.style.display = "flex";
+  wizardCurrentStep = 0;
+  renderWizardStep();
+}
+
+function hideWizard() {
+  const overlay = $("#wizardOverlay");
+  if (!overlay) return;
+  overlay.style.display = "none";
+}
+
+function renderWizardStep() {
+  const step = WIZARD_STEPS[wizardCurrentStep];
+  if (!step) return;
+  
+  // 更新标题
+  $("#wizardTitle").textContent = step.title;
+  
+  // 更新进度
+  const progress = ((wizardCurrentStep + 1) / WIZARD_STEPS.length) * 100;
+  $("#wizardProgress").style.width = `${progress}%`;
+  $("#wizardStepInfo").textContent = `步骤 ${wizardCurrentStep + 1} / ${WIZARD_STEPS.length}`;
+  
+  // 更新内容
+  $("#wizardBody").innerHTML = step.content;
+  
+  // 绑定步骤内的action事件
+  const actionEl = $("#wizardBody .wizard-action");
+  if (actionEl && step.action) {
+    actionEl.addEventListener("click", () => {
+      step.action();
+    });
+  }
+  
+  // 更新按钮状态
+  $("#wizardPrevBtn").style.display = wizardCurrentStep > 0 ? "" : "none";
+  
+  const nextBtn = $("#wizardNextBtn");
+  if (wizardCurrentStep === WIZARD_STEPS.length - 1) {
+    nextBtn.textContent = "完成";
+    nextBtn.className = "btn primary accent";
+  } else {
+    nextBtn.textContent = "下一步";
+    nextBtn.className = "btn primary";
+  }
+}
+
+function wizardNext() {
+  if (wizardCurrentStep < WIZARD_STEPS.length - 1) {
+    wizardCurrentStep++;
+    renderWizardStep();
+  } else {
+    wizardComplete();
+  }
+}
+
+function wizardPrev() {
+  if (wizardCurrentStep > 0) {
+    wizardCurrentStep--;
+    renderWizardStep();
+  }
+}
+
+function wizardSkip() {
+  wizardComplete();
+}
+
+function wizardComplete() {
+  localStorage.setItem("geo_wizard_completed", "true");
+  hideWizard();
+  toast("引导完成！开始创建你的第一个产品吧", "success");
+  showView("products");
+}
+
+// 页面加载时初始化引导
+// 仅在用户确实没有产品时显示（新用户），已有数据的用户跳过
+if (isLoggedIn() && !localStorage.getItem("geo_wizard_completed")) {
+  setTimeout(() => {
+    // 如果用户已有产品或文章，说明不是新用户，自动标记完成
+    const hasContent = (state.products || []).length > 0 || (state.articles || []).length > 0;
+    if (hasContent) {
+      localStorage.setItem("geo_wizard_completed", "true");
+    } else {
+      initWizard();
+    }
+  }, 500);
 }

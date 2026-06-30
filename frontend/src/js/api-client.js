@@ -1,45 +1,184 @@
 /* GEO Studio — API Client Layer
  *
- * 规范的三层 API 客户端：
+ * 三层 API 客户端：
  *   1. 配置（从 window.__GEO_CONFIG__ 或默认值读取）
- *   2. 认证（PocketBase 管理员 Token 管理）
- *   3. 请求（路径翻译 + 错误处理 + 响应格式化）
+ *   2. 认证（用户 Token 管理，支持注册/登录/登出）
+ *   3. 请求（路径翻译 + user_id 注入 + 错误处理）
  */
 
 // ===== 第一层：配置 =======================================================
 
 const CONFIG = {
   pbUrl: (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "http://127.0.0.1:8085",
-  pbEmail: (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbEmail) || "admin@geo.local",
-  pbPassword: (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbPassword) || "admin123456",
 };
 
-// ===== 第二层：认证 =======================================================
+// ===== 用户认证 ==========================================================
 
-let _token = null;
-let _tokenExpiry = 0;
+let _userToken = null;
+let _userRecord = null;
+let _userEmail = null;
+// 注意：不再存储密码，token过期后要求重新登录
 
-async function apiAuth() {
-  if (_token && Date.now() < _tokenExpiry) return _token;
+function loadAuthFromStorage() {
+  try {
+    const raw = localStorage.getItem("geo_auth");
+    if (raw) {
+      const data = JSON.parse(raw);
+      _userToken = data.token || null;
+      _userRecord = data.record || null;
+      _userEmail = data.email || null;
+      // 不再加载密码
+    }
+  } catch { /* ignore */ }
+}
+loadAuthFromStorage();
 
-  const res = await fetch(`${CONFIG.pbUrl}/api/collections/_superusers/auth-with-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identity: CONFIG.pbEmail, password: CONFIG.pbPassword }),
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError("认证失败：" + (body.message || `HTTP ${res.status}`), 401);
+function saveAuthToStorage() {
+  if (_userToken && _userRecord) {
+    localStorage.setItem("geo_auth", JSON.stringify({
+      token: _userToken,
+      record: _userRecord,
+      email: _userEmail,
+      // 不再保存密码
+    }));
+  } else {
+    localStorage.removeItem("geo_auth");
   }
-
-  const data = await res.json();
-  _token = data.token;
-  _tokenExpiry = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 天
-  return _token;
 }
 
-// ===== 第三层：错误类型 ====================================================
+function isLoggedIn() {
+  return !!_userToken && !!_userRecord;
+}
+
+function getCurrentUserId() {
+  return _userRecord ? _userRecord.id : null;
+}
+
+function getCurrentUserEmail() {
+  return _userRecord ? _userRecord.email : null;
+}
+
+function getCurrentUserName() {
+  return _userRecord ? (_userRecord.name || _userRecord.email) : null;
+}
+
+async function userLogin(email, password) {
+  const res = await fetch(`${CONFIG.pbUrl}/api/collections/users/auth-with-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identity: email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.message || "登录失败", res.status);
+  _userToken = data.token;
+  _userRecord = data.record;
+  _userEmail = email;
+  // 不再存储密码
+  saveAuthToStorage();
+  return data.record;
+}
+
+async function userRegister(email, password, name) {
+  const res = await fetch(`${CONFIG.pbUrl}/api/collections/users/records`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email,
+      password,
+      passwordConfirm: password,
+      name: name || email.split("@")[0],
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data.data ? Object.values(data.data).flat().join("; ") : (data.message || "注册失败");
+    throw new ApiError(msg, res.status);
+  }
+  // 注册成功后自动登录获取 token
+  return await userLogin(email, password);
+}
+
+function userLogout() {
+  _userToken = null;
+  _userRecord = null;
+  _userEmail = null;
+  localStorage.removeItem("geo_auth");
+}
+
+// JWT 解码（不验证签名，仅读取 payload）
+function decodeJwtPayload(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(c =>
+      '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+    ).join(''));
+    return JSON.parse(jsonPayload);
+  } catch {
+    return null;
+  }
+}
+
+// 检查 token 是否已过期
+function isTokenExpired(token) {
+  const payload = decodeJwtPayload(token);
+  if (!payload || !payload.exp) return false;
+  const now = Math.floor(Date.now() / 1000);
+  return payload.exp < now;
+}
+
+// 使用 PocketBase auth-refresh 端点刷新 token（不需要密码）
+async function refreshTokenIfNeeded() {
+  if (!_userToken) return;
+  
+  // 如果token已过期，直接返回（会在apiAuth中处理401）
+  if (isTokenExpired(_userToken)) return;
+  
+  // 检查是否需要刷新（24小时内过期则刷新）
+  const payload = decodeJwtPayload(_userToken);
+  if (!payload || !payload.exp) return;
+  const now = Math.floor(Date.now() / 1000);
+  const expiresIn = payload.exp - now;
+  
+  // 如果24小时内过期，尝试刷新
+  if (expiresIn < 86400) {
+    try {
+      const res = await fetch(`${CONFIG.pbUrl}/api/collections/users/auth-refresh`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": _userToken,
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        _userToken = data.token;
+        _userRecord = data.record;
+        saveAuthToStorage();
+        console.log("Token 已自动刷新");
+      }
+    } catch (e) {
+      console.warn("Token 自动刷新失败：", e.message);
+    }
+  }
+}
+
+async function apiAuth() {
+  if (_userToken) {
+    // 检查token是否已过期
+    if (isTokenExpired(_userToken)) {
+      // token已过期，清除认证状态
+      userLogout();
+      throw new ApiError("登录已过期，请重新登录", 401, "TOKEN_EXPIRED");
+    }
+    // 尝试刷新即将过期的 token
+    await refreshTokenIfNeeded();
+    return _userToken;
+  }
+  throw new ApiError("请先登录", 401, "NOT_AUTHENTICATED");
+}
+
+// ===== 第二层：错误类型 ===================================================
 
 class ApiError extends Error {
   constructor(message, status = 500, code = "API_ERROR") {
@@ -62,11 +201,8 @@ class ValidationError extends ApiError {
   }
 }
 
-// ===== 第三层：HTTP 请求 ===================================================
+// ===== 第三层：HTTP 请求 ==================================================
 
-/**
- * 通用 API 请求（带认证、错误处理、自动重试 5xx）
- */
 async function apiRequest(path, { method = "GET", body = null, headers = {} } = {}) {
   const token = await apiAuth();
 
@@ -95,7 +231,7 @@ async function apiRequest(path, { method = "GET", body = null, headers = {} } = 
     throw err;
   }
 
-  // 5xx 自动重试（最多 2 次）
+  // 5xx 自动重试
   if (res.status >= 500 && method === "GET") {
     for (let attempt = 0; attempt < 2; attempt++) {
       await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
@@ -108,6 +244,10 @@ async function apiRequest(path, { method = "GET", body = null, headers = {} } = 
 
   if (!res.ok) {
     const msg = (data && data.message) || `请求失败 (HTTP ${res.status})`;
+    if (res.status === 401) {
+      userLogout();
+      throw new ApiError("登录已过期，请重新登录", 401, "UNAUTHORIZED");
+    }
     if (res.status === 404) throw new NotFoundError(path, "");
     if (res.status === 400) throw new ValidationError(msg);
     throw new ApiError(msg, res.status);
@@ -116,53 +256,39 @@ async function apiRequest(path, { method = "GET", body = null, headers = {} } = 
   return data;
 }
 
-// ===== 路径翻译（旧 API → PocketBase） =====================================
+// ===== 路径翻译 ===========================================================
 
 const COLLECTION_MAP = {
   products: "products",
   geo_questions: "geo_questions",
   platforms: "platforms",
+  contents: "articles",
   articles: "articles",
   tasks: "publish_tasks",
   ai_settings: "ai_settings",
+  user_models: "user_models",
+  product_images: "product_images",
 };
 
-/**
- * 将旧版 REST 路径转换为 PocketBase 格式
- *
- * /api/products          → GET  /api/collections/products/records
- * /api/products/1        → GET  /api/collections/products/records/1
- * POST /api/products     → POST /api/collections/products/records
- * PUT /api/products/1    → PATCH /api/collections/products/records/1
- * DELETE /api/products/1 → DELETE /api/collections/products/records/1
- * /api/bootstrap         → 聚合查询
- * /api/coverage          → 计算覆盖矩阵
- */
 function translatePath(path, method) {
   const parts = path.replace(/^\/api\//, "").split("/");
   const resource = parts[0];
 
-  // 数字 ID：单条记录操作
-  if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+    if (parts.length === 2 && /^[a-z0-9]+$/i.test(parts[1]) && parts[1].length >= 10) {
     const collection = COLLECTION_MAP[resource];
     if (!collection) return { type: "action", path };
     return { type: "record", collection, id: parts[1] };
   }
 
-  // 资源列表
   if (COLLECTION_MAP[resource]) {
     return { type: "list", collection: COLLECTION_MAP[resource] };
   }
 
-  // 特殊端点
   return { type: "action", path };
 }
 
-// ===== PocketBase 响应格式转换 ============================================
+// ===== 响应格式转换 =======================================================
 
-/**
- * 将 PocketBase record 转为旧系统格式
- */
 function pbRecordToApp(record) {
   const { collectionId, collectionName, created, updated, expand, ...rest } = record;
   return {
@@ -172,26 +298,21 @@ function pbRecordToApp(record) {
   };
 }
 
-/**
- * 去除不需要传给 PocketBase 的字段
- */
 function cleanPayload(payload) {
-  const { id, created_at, updated_at, ...rest } = payload;
+  const { id, ...rest } = payload;
   return rest;
 }
 
-// ===== AI 端点处理（前端直连） ============================================
+// ===== AI 端点处理（前端直连） =============================================
 
-/**
- * 调用 OpenAI-compatible API（用于 AI 生成和图片生成）
- */
 async function callAI(settings, messages) {
   const baseUrl = settings.text_base_url || settings.base_url || "https://open.bigmodel.cn/api/paas/v4";
   const model = settings.text_model || settings.model || "glm-4-flash";
   const apiKey = settings.text_api_key || settings.api_key || "";
-  const temperature = parseFloat(settings.temperature || 0.7);
 
   if (!apiKey) throw new ValidationError("请先配置 AI API Key");
+
+  const temperature = parseFloat(settings.temperature || 0.7);
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
@@ -199,11 +320,7 @@ async function callAI(settings, messages) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-    }),
+    body: JSON.stringify({ model, messages, temperature }),
   });
 
   if (!res.ok) {
@@ -215,72 +332,31 @@ async function callAI(settings, messages) {
   return data.choices[0].message.content;
 }
 
-/**
- * 调用图片生成 API
- */
-async function callImageGen(settings, prompt) {
-  const baseUrl = settings.image_base_url || settings.text_base_url || settings.base_url || "https://open.bigmodel.cn/api/paas/v4";
-  const model = settings.image_model || "cogview-3-flash";
-  const apiKey = settings.image_api_key || settings.text_api_key || settings.api_key || "";
+// ===== 公开 API ===========================================================
 
-  if (!apiKey) throw new ValidationError("请先配置图片生成 API Key");
-  if (!prompt) throw new ValidationError("请先填写图片提示词");
-
-  const res = await fetch(`${baseUrl}/images/generations`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model, prompt, n: 1 }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new ApiError(`图片生成失败：${err.error?.message || `HTTP ${res.status}`}`, res.status);
-  }
-
-  return await res.json();
-}
-
-// ===== 公开 API（与旧系统兼容） ===========================================
-
-/**
- * 主 API 函数，签名与原 api() 完全兼容
- *
- * GET  /api/products         → 返回数组
- * POST /api/products         → 返回单条
- * PUT  /api/products/1       → 返回单条
- * DELETE /api/products/1     → 返回 {ok:true}
- * /api/bootstrap             → 聚合查询
- * /api/coverage              → 覆盖计算
- * /api/backup                → 导出
- * /api/ai/*                  → AI 相关
- */
 async function geoApi(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const translated = translatePath(path, method);
 
-  // ---- 特殊端点 ----
+  // 特殊端点
   if (translated.type === "action") {
     switch (path) {
       case "/api/bootstrap": return apiBootstrap();
       case "/api/coverage": return apiCoverage();
       case "/api/backup": return apiBackupExport();
-      // AI 端点交给原来的事件处理（或前端直连）
+      case "/api/tasks/assign": return apiAssignTasks(JSON.parse(options.body || "{}"));
       default: throw new ApiError(`未适配的端点：${path}`, 501);
     }
   }
 
-  // ---- 列表操作 ----
+  // 列表操作
   if (translated.type === "list") {
     const coll = translated.collection;
 
     if (method === "GET") {
-      // 构建查询参数
       let queryPath = `/api/collections/${coll}/records?perPage=500`;
       if (coll === "publish_tasks") queryPath += "&expand=article_id,platform_id";
-      if (coll !== "publish_tasks" && coll !== "ai_settings") queryPath += "&sort=-updated";
+      if (coll !== "publish_tasks" && coll !== "ai_settings" && coll !== "user_models") queryPath += "&sort=-updated_at";
 
       const data = await apiRequest(queryPath);
       return (data.items || []).map(pbRecordToApp);
@@ -288,6 +364,11 @@ async function geoApi(path, options = {}) {
 
     if (method === "POST") {
       const body = typeof options.body === "string" ? JSON.parse(options.body) : (options.body || {});
+      // 自动注入 user_id 和时间戳（updated_at/created_at 是 text 字段，需手动维护）
+      body.user_id = getCurrentUserId();
+      const now = new Date().toISOString();
+      if (!body.created_at) body.created_at = now;
+      if (!body.updated_at) body.updated_at = now;
       const data = await apiRequest(`/api/collections/${coll}/records`, {
         method: "POST",
         body: cleanPayload(body),
@@ -296,7 +377,7 @@ async function geoApi(path, options = {}) {
     }
   }
 
-  // ---- 单条记录操作 ----
+  // 单条记录操作
   if (translated.type === "record") {
     const { collection, id } = translated;
 
@@ -309,6 +390,7 @@ async function geoApi(path, options = {}) {
 
     if (method === "PUT" || method === "PATCH") {
       const body = typeof options.body === "string" ? JSON.parse(options.body) : (options.body || {});
+      body.updated_at = new Date().toISOString();
       const data = await apiRequest(`/api/collections/${collection}/records/${id}`, {
         method: "PATCH",
         body: cleanPayload(body),
@@ -325,27 +407,28 @@ async function geoApi(path, options = {}) {
   throw new ApiError(`不支持的请求：${method} ${path}`, 400);
 }
 
-// ===== Bootstrap（聚合查询） ==============================================
+// ===== Bootstrap ==========================================================
 
 async function apiBootstrap() {
   const token = await apiAuth();
   const headers = { Authorization: token };
   const base = `${CONFIG.pbUrl}/api/collections`;
 
-  const [productsRes, geoRes, platformsRes, articlesRes, tasksRes, aiRes] = await Promise.all([
-    fetch(`${base}/products/records?perPage=500&sort=-updated`, { headers }),
-    fetch(`${base}/geo_questions/records?perPage=500&sort=-updated`, { headers }),
+  const [productsRes, geoRes, platformsRes, articlesRes, tasksRes, aiRes, modelsRes, imagesRes] = await Promise.all([
+    fetch(`${base}/products/records?perPage=500&sort=-updated_at`, { headers }),
+    fetch(`${base}/geo_questions/records?perPage=500&sort=-updated_at`, { headers }),
     fetch(`${base}/platforms/records?perPage=500&sort=status,category,name`, { headers }),
-    fetch(`${base}/articles/records?perPage=500&sort=-updated`, { headers }),
-    fetch(`${base}/publish_tasks/records?perPage=500&expand=article_id,platform_id&sort=-updated`, { headers }),
+    fetch(`${base}/articles/records?perPage=500&sort=-updated_at`, { headers }),
+    fetch(`${base}/publish_tasks/records?perPage=500&expand=article_id,platform_id&sort=-updated_at`, { headers }),
     fetch(`${base}/ai_settings/records`, { headers }),
+    fetch(`${base}/user_models/records?perPage=500`, { headers }),
+    fetch(`${base}/product_images/records?perPage=500`, { headers }),
   ]);
 
   const products = ((await productsRes.json()).items || []).map(pbRecordToApp);
   const platforms = ((await platformsRes.json()).items || []).map(pbRecordToApp);
   const articles = ((await articlesRes.json()).items || []).map(pbRecordToApp);
 
-  // geo_questions：关联 product name
   const geoQuestions = ((await geoRes.json()).items || []).map(r => {
     const q = pbRecordToApp(r);
     const product = products.find(p => String(p.id) === String(q.product_id));
@@ -353,10 +436,8 @@ async function apiBootstrap() {
     return q;
   });
 
-  // publish_tasks：展开关联信息
   const tasks = ((await tasksRes.json()).items || []).map(r => {
     const t = pbRecordToApp(r);
-    // PocketBase expand 把关联数据放在 expand 下
     if (r.expand) {
       if (r.expand.article_id) {
         const a = r.expand.article_id;
@@ -367,6 +448,7 @@ async function apiBootstrap() {
         t.article_tags = a.tags || "";
         t.article_image_prompt = a.image_prompt || "";
         t.article_risk_notes = a.risk_notes || "";
+        t.product_id = a.product_id || "";
       }
       if (r.expand.platform_id) {
         const p = r.expand.platform_id;
@@ -380,17 +462,19 @@ async function apiBootstrap() {
     return t;
   });
 
-  // ai_settings
   const aiItems = ((await aiRes.json()).items || []).map(pbRecordToApp);
   const aiSettings = aiItems.length > 0 ? aiItems[0] : null;
 
-  // coverage
+  const userModels = ((await modelsRes.json()).items || []).map(pbRecordToApp);
+
+  const productImages = ((await imagesRes.json()).items || []).map(pbRecordToApp);
+
   const coverage = apiCoverageInternal(products, geoQuestions, articles, tasks);
 
-  return { products, geo_questions: geoQuestions, platforms, articles, tasks, ai_settings: aiSettings, coverage };
+  return { products, geo_questions: geoQuestions, platforms, articles, tasks, ai_settings: aiSettings, user_models: userModels, product_images: productImages, coverage };
 }
 
-// ===== Coverage ============================================================
+// ===== Coverage & Backup ==================================================
 
 async function apiCoverage() {
   const bootstrap = await apiBootstrap();
@@ -445,19 +529,43 @@ function apiCoverageInternal(products, geoQuestions, articles, tasks) {
   };
 }
 
-// ===== Backup ==============================================================
-
 async function apiBackupExport() {
   const data = await apiBootstrap();
   delete data.coverage;
   return data;
 }
 
+// ===== Assign Tasks =======================================================
+
+async function apiAssignTasks({ article_ids, platform_ids }) {
+  const currentTasks = (await apiRequest(`/api/collections/publish_tasks/records?perPage=500`)).items || [];
+  const created = [];
+  const skipped = [];
+  for (const aid of article_ids) {
+    for (const pid of platform_ids) {
+      const exists = currentTasks.find(t => t.article_id === String(aid) && t.platform_id === String(pid));
+      if (exists) { skipped.push(exists.id); continue; }
+      const data = await apiRequest("/api/collections/publish_tasks/records", {
+        method: "POST",
+        body: { article_id: String(aid), platform_id: String(pid), status: "todo", user_id: getCurrentUserId() },
+      });
+      created.push(data.id);
+    }
+  }
+  return { created, skipped };
+}
+
 // ===== 挂载到全局 ==========================================================
 
 window.geoApi = geoApi;
 window.callAI = callAI;
-window.callImageGen = callImageGen;
 window.ApiError = ApiError;
 window.NotFoundError = NotFoundError;
 window.ValidationError = ValidationError;
+window.userLogin = userLogin;
+window.userRegister = userRegister;
+window.userLogout = userLogout;
+window.isLoggedIn = isLoggedIn;
+window.getCurrentUserId = getCurrentUserId;
+window.getCurrentUserEmail = getCurrentUserEmail;
+window.getCurrentUserName = getCurrentUserName;

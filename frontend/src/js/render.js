@@ -1,15 +1,50 @@
 /* GEO Studio - Render functions for all views */
 
+// ===== 列值颜色映射（Tailwind 100 系列 17 色调色板） =====
+// 同一列中相同值用同一颜色，不同值用不同颜色
+const TAILWIND_100_PALETTE = [
+  "bg-red-100", "bg-orange-100", "bg-amber-100", "bg-yellow-100",
+  "bg-lime-100", "bg-green-100", "bg-emerald-100", "bg-teal-100",
+  "bg-cyan-100", "bg-sky-100", "bg-blue-100", "bg-indigo-100",
+  "bg-violet-100", "bg-purple-100", "bg-fuchsia-100", "bg-pink-100",
+  "bg-rose-100"
+];
+const TAILWIND_700_TEXT = [
+  "text-red-700", "text-orange-700", "text-amber-700", "text-yellow-700",
+  "text-lime-700", "text-green-700", "text-emerald-700", "text-teal-700",
+  "text-cyan-700", "text-sky-700", "text-blue-700", "text-indigo-700",
+  "text-violet-700", "text-purple-700", "text-fuchsia-700", "text-pink-700",
+  "text-rose-700"
+];
+// 列 -> 值 -> 颜色索引 的缓存（保证同列同色）
+const _columnColorCache = {};
+function getColumnColorClass(columnName, value) {
+  if (!value) return "";
+  if (!_columnColorCache[columnName]) _columnColorCache[columnName] = {};
+  const cache = _columnColorCache[columnName];
+  if (!(value in cache)) {
+    // 简单 hash -> 索引
+    let h = 0;
+    for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) | 0;
+    cache[value] = Math.abs(h) % TAILWIND_100_PALETTE.length;
+  }
+  const idx = cache[value];
+  return `${TAILWIND_100_PALETTE[idx]} ${TAILWIND_700_TEXT[idx]}`;
+}
+
 function render() {
+  if (!isLoggedIn()) { renderAuthView(); return; }
   renderStats();
   renderCoverage();
   renderProducts();
   renderGeoQuestions();
-  renderGenerator();
   renderArticles();
   renderPlatforms();
   renderTasks();
-  renderAiSettings();
+  renderWorkshop();
+  renderSettings();
+  if (typeof checkAchievements === "function") checkAchievements();
+  if (typeof renderAchievements === "function") renderAchievements();
 }
 
 function showView(viewId) {
@@ -20,8 +55,8 @@ function showView(viewId) {
   // Close mobile sidebar after navigation
   $(".sidebar")?.classList.remove("open");
   $("#sidebarOverlay")?.classList.remove("show");
-  // Restore article draft when entering articles view with empty editor
-  if (viewId === "articles") {
+  // Restore article draft when entering workshop view with empty editor
+  if (viewId === "workshop") {
     setTimeout(loadArticleDraft, 50);
   }
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -31,6 +66,12 @@ function showView(viewId) {
 
 function renderStats() {
   const published = state.tasks.filter(t => t.status === "published").length;
+  const drafts = state.articles.filter(a => a.status === "draft").length;
+  const review = state.articles.filter(a => a.status === "review").length;
+  const todoTasks = state.tasks.filter(t => t.status === "todo").length;
+  const reviseTasks = state.tasks.filter(t => t.status === "revise").length;
+  const highGaps = (state.coverage?.summary?.high_priority_gaps) || 0;
+
   $("#statProducts").textContent = state.products.length;
   $("#statQuestions").textContent = state.geo_questions.length;
   $("#statArticles").textContent = state.articles.length;
@@ -88,31 +129,83 @@ function renderStats() {
         <strong>${escapeHtml(q.question)}</strong>
         ${parts.length ? `<div class="muted">${parts.join(" · ")}</div>` : ""}
       </div>`;
-    }).join("") || emptyStateWithAction("还没有高优先级问题", "Q", `<button class="ghost" data-action="jump" data-target="geo">去 GEO 问题库</button>`);
+    }).join("") || emptyStateWithAction("还没有高优先级问题", "Q", `<button class="ghost" data-action="jump" data-target="products">去产品档案</button>`);
   $$(".question-link").forEach(row => row.addEventListener("click", () => {
-    showView("geo");
-    selectGeoQuestion(Number(row.dataset.id));
+    const q = state.geo_questions.find(x => x.id === row.dataset.id);
+    if (q) showProductDetail(q.product_id, "geo");
   }));
 
   $("#recentArticles").innerHTML = state.articles.slice(0, 6).map(article => {
     const parts = [escapeHtml(article.target_platform), escapeHtml(article.content_type)].filter(Boolean);
+    const quality = typeof calcContentQuality === "function" ? calcContentQuality(article.body, article.title) : null;
     return `
     <div class="list-row article-link" data-id="${article.id}">
-      <strong>${escapeHtml(article.title)}</strong>
+      <div style="display:flex;align-items:center;gap:8px">
+        <strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(article.title)}</strong>
+        ${quality && quality.score > 0 ? `<span class="quality-score ${quality.level}" style="font-size:10px;padding:2px 6px">${quality.score}</span>` : ""}
+      </div>
       ${parts.length ? `<div class="muted">${parts.join(" · ")}</div>` : ""}
     </div>`;
-  }).join("") || emptyStateWithAction("还没有文章", "📝", `<button class="ghost" data-action="jump" data-target="generator">去内容生成</button>`);
+  }).join("") || emptyStateWithAction("还没有文章", "📝", `<button class="ghost" data-action="jump" data-target="workshop">去内容工坊</button>`);
   $$(".article-link").forEach(row => row.addEventListener("click", () => {
-    showView("articles");
-    selectArticle(Number(row.dataset.id));
+    showView("workshop");
+    selectArticle(row.dataset.id);
   }));
 
-  $("#todoTasks").innerHTML = state.tasks.filter(t => t.status === "todo").slice(0, 6).map(task => `
-    <div class="list-row task-link" data-id="${task.id}">
-      <strong>${escapeHtml(task.article_title)}</strong>
-      <div class="muted">${escapeHtml(task.platform_name)}</div>
-    </div>
-  `).join("") || emptyStateWithAction("暂无待发布任务", "📋", `<button class="ghost" data-action="jump" data-target="tasks">去发布记录</button>`);
+  // 待办列表：整合待发布+需修改+草稿+高优先级缺口
+  const todoItems = [];
+  if (highGaps > 0) {
+    todoItems.push({ icon: "🔥", text: `${highGaps} 个高优先级内容缺口待创作`, action: "coverage" });
+  }
+  if (drafts > 0) {
+    todoItems.push({ icon: "📝", text: `${drafts} 篇草稿待完善`, action: "drafts" });
+  }
+  if (todoTasks > 0) {
+    todoItems.push({ icon: "📋", text: `${todoTasks} 个任务待发布`, action: "tasks" });
+  }
+  if (reviseTasks > 0) {
+    todoItems.push({ icon: "✏️", text: `${reviseTasks} 篇内容需修改`, action: "revise" });
+  }
+  if (review > 0) {
+    todoItems.push({ icon: "👀", text: `${review} 篇内容待审核`, action: "review" });
+  }
+
+  const getTodoAction = (action) => {
+    switch(action) {
+      case "coverage": return "showView(\"products\")";
+      case "drafts":
+      case "review":
+        return "showView(\"workshop\")";
+      case "tasks":
+      case "revise":
+        return "showView(\"tasks\")";
+      default: return "";
+    }
+  };
+
+  $("#todoTasks").innerHTML = todoItems.length
+    ? todoItems.slice(0, 6).map((item, i) => `
+      <div class="list-row todo-action-item" data-action="${item.action}" style="cursor:pointer">
+        <span style="margin-right:8px">${item.icon}</span>
+        <strong>${item.text}</strong>
+      </div>`).join("")
+    : state.products.length
+      ? `<div class="empty-state"><div class="empty-state-icon">🎉</div><p class="empty-state-title">太棒了！暂无待办事项</p></div>`
+      : emptyStateWithAction("暂无待发布任务", "📋", `<button class="ghost" data-action="jump" data-target="tasks">去发布记录</button>`);
+
+  $$(".todo-action-item").forEach(row => row.addEventListener("click", () => {
+    const action = row.dataset.action;
+    switch(action) {
+      case "coverage": showView("dashboard"); break;
+      case "drafts":
+      case "review":
+        showView("workshop"); switchSubTab("generated"); break;
+      case "tasks":
+      case "revise":
+        showView("tasks"); break;
+    }
+  }));
+
   $$(".task-link").forEach(row => row.addEventListener("click", () => {
     showView("tasks");
   }));
@@ -157,9 +250,10 @@ function renderCoverage() {
       `).join("")
     : "";
   $$(".gap-link").forEach(row => row.addEventListener("click", () => {
-    const qId = Number(row.dataset.id);
-    showView("geo");
-    selectGeoQuestion(qId);
+    const qId = row.dataset.id;
+    const q = state.geo_questions.find(x => x.id === qId);
+    if (!q) return;
+    showProductDetail(q.product_id, "geo");
     // 高亮对应的问题卡片
     setTimeout(() => {
       const card = $(`.geo-question-card .edit-geo-question[data-id="${qId}"]`)?.closest(".geo-question-card");
@@ -175,31 +269,78 @@ function renderCoverage() {
 // --- Products ---
 
 function renderProducts() {
-  $("#productList").innerHTML = state.products.map(product => {
+  const query = ($("#productSearch")?.value || "").trim().toLowerCase();
+  const list = state.products.filter(p => {
+    const text = `${p.name} ${p.type} ${p.url} ${p.audience} ${p.selling_points} ${p.tone} ${p.goal}`.toLowerCase();
+    return !query || text.includes(query);
+  });
+
+  const cardHtml = (product) => {
     const qCount = state.geo_questions.filter(q => q.product_id === product.id).length;
     const aCount = state.articles.filter(a => a.product_id === product.id).length;
     const cov = (state.coverage?.by_product || []).find(p => p.product_id === product.id);
     const covered = cov?.covered_q || 0;
     const total = cov?.total_q || 0;
-    const meta = [escapeHtml(product.type), escapeHtml(product.url)].filter(Boolean).join(" · ");
+    const coveragePct = total ? Math.round((covered / total) * 100) : 0;
+    const initial = (product.name || "?").trim().charAt(0).toUpperCase();
+    const statusLabel = product.status === "active" ? "运营中" : (product.status === "draft" ? "草稿" : (product.status === "paused" ? "暂停" : "归档"));
+    const statusTone = product.status === "active" ? "on" : "off";
     return `
-    <article class="card product-card" data-id="${product.id}">
-      <h3>${escapeHtml(product.name)}</h3>
-      ${meta ? `<p class="muted">${meta}</p>` : ""}
-      <p>${escapeHtml((product.selling_points || "").slice(0, 150))}</p>
-      <div class="tagline">
-        <span class="tag">${total ? `${covered}/${total} 覆盖` : "0 问题"}</span>
-        <span class="tag">${aCount} 篇文章</span>
-        ${product.tone ? `<span class="tag">${escapeHtml(product.tone)}</span>` : ""}
-        ${product.goal ? `<span class="tag">${escapeHtml(product.goal)}</span>` : ""}
+    <article class="product-grid-card" data-id="${product.id}">
+      <div class="product-grid-head">
+        <div class="product-grid-avatar">${escapeHtml(initial)}</div>
+        <div class="product-grid-title">
+          <h3>${escapeHtml(product.name)}</h3>
+          <span class="product-grid-status ${statusTone}">● ${statusLabel}</span>
+        </div>
       </div>
-      <div class="button-row mini-actions">
-        <button class="ghost edit-product" data-id="${product.id}">编辑</button>
-        <button class="ghost use-product" data-id="${product.id}">去生成</button>
-        <button class="ghost delete-product" data-id="${product.id}">删除</button>
+      ${product.selling_points ? `<p class="product-grid-desc">${escapeHtml(product.selling_points.slice(0, 120))}${product.selling_points.length > 120 ? "…" : ""}</p>` : ""}
+      <div class="product-grid-meta">
+        ${product.type ? `<div class="pg-meta-item"><span class="meta-label">类型</span><span class="meta-value ${getColumnColorClass("type", product.type)}">${escapeHtml(product.type)}</span></div>` : ""}
+        ${product.tone ? `<div class="pg-meta-item"><span class="meta-label">语气</span><span class="meta-value ${getColumnColorClass("tone", product.tone)}">${escapeHtml(product.tone)}</span></div>` : ""}
+      </div>
+      <div class="product-grid-stats">
+        <div class="pg-stat"><span class="pg-stat-num">${qCount}</span><span class="pg-stat-label">GEO 问题</span></div>
+        <div class="pg-stat"><span class="pg-stat-num">${aCount}</span><span class="pg-stat-label">内容</span></div>
+        <div class="pg-stat"><span class="pg-stat-num">${coveragePct}%</span><span class="pg-stat-label">覆盖率</span></div>
+      </div>
+      <div class="product-grid-actions">
+        <button class="btn ghost sm open-product-detail" data-id="${product.id}">详情</button>
+        <button class="btn ghost sm open-product-geo" data-id="${product.id}">GEO 问题${qCount ? ` (${qCount})` : ""}</button>
+        <button class="btn ghost sm edit-product" data-id="${product.id}">编辑</button>
+        <button class="btn ghost sm use-product" data-id="${product.id}">生成内容</button>
+        <button class="btn ghost sm danger delete-product" data-id="${product.id}">删除</button>
       </div>
     </article>`;
-  }).join("") || emptyStateWithAction("还没有产品档案", "📦", `<button class="ghost" data-action="jump" data-target="products">新增产品</button>`);
+  };
+
+  const html = !list.length
+    ? (state.products.length
+      ? `<div class="search-empty">没有找到匹配的产品</div>`
+      : emptyStateWithAction("还没有产品档案", "📦", `<button class="ghost" data-action="switch-product-add">去新增产品</button>`))
+    : list.map(cardHtml).join("");
+
+  const grid = $("#productGrid");
+  if (grid) grid.innerHTML = html;
+  // 更新 Tab 角标
+  const cnt = $("#productListCount");
+  if (cnt) cnt.textContent = String(state.products.length);
+}
+
+function renderProductImages(productId) {
+  const images = (state.product_images || []).filter(img => String(img.product_id) === String(productId));
+  $("#pdImageGallery").innerHTML = images.map(img => {
+    const pbUrl = (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "http://127.0.0.1:8085";
+    const imageUrl = `${pbUrl}/api/files/product_images/${img.id}/${img.image}`;
+    return `
+    <div class="product-image-card">
+      <div class="product-image-preview" style="background-image:url('${imageUrl.replace(/'/g, "%27")}')"></div>
+      <p class="muted">${escapeHtml(img.description || "")}</p>
+    </div>`;
+  }).join("");
+  if ($("#pdImagesEmpty")) {
+    $("#pdImagesEmpty").style.display = images.length ? "none" : "";
+  }
 }
 
 function selectProduct(id) {
@@ -218,6 +359,7 @@ function selectProduct(id) {
   form.elements.forbidden_words.value = product.forbidden_words || "";
   $("#productFormTitle").textContent = "编辑产品";
   $("#saveProductBtn").textContent = "更新产品";
+  switchSubTab("product-add");
 }
 
 function resetProductForm() {
@@ -225,7 +367,6 @@ function resetProductForm() {
   $("#productId").value = "";
   $("#productFormTitle").textContent = "新增产品";
   $("#saveProductBtn").textContent = "保存产品";
-  $("#productForm").elements.tone.value = "真实、专业、克制";
 }
 
 function applyProductSuggestion(rawItem) {
@@ -239,85 +380,32 @@ function applyProductSuggestion(rawItem) {
   $("#productFormTitle").textContent = $("#productId").value ? "编辑产品" : "新增产品";
 }
 
-// --- Generator ---
-
-function renderGenerator() {
-  // 保留产品选择
-  const genProductEl = $("#genProduct");
-  const curGenProduct = genProductEl.value;
-  genProductEl.innerHTML = state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-  if (curGenProduct && Array.from(genProductEl.options).some(o => o.value === curGenProduct)) {
-    genProductEl.value = curGenProduct;
-  }
-  $("#contentTypes").innerHTML = contentTypes.map((type, index) => `
-    <label><input type="checkbox" value="${escapeHtml(type)}" ${index < 5 ? "checked" : ""}>${escapeHtml(type)}</label>
-  `).join("");
-  const enabled = state.platforms.filter(p => p.status === "enabled").slice(0, 40);
-  // 按分类分组渲染平台
-  const groups = {};
-  enabled.forEach(p => {
-    const cat = p.category || "其他";
-    if (!groups[cat]) groups[cat] = [];
-    groups[cat].push(p);
-  });
-  $("#genPlatforms").innerHTML = Object.entries(groups).map(([cat, platforms]) => `
-    <div class="platform-group">
-      <div class="platform-group-title">${escapeHtml(cat)}</div>
-      ${platforms.map(p => `<label title="${escapeHtml(p.notes)}"><input type="checkbox" value="${p.id}">${escapeHtml(p.name)}</label>`).join("")}
-    </div>
-  `).join("");
-  const adaptArticleEl = $("#adaptArticle");
-  const curAdaptArticle = adaptArticleEl.value;
-  adaptArticleEl.innerHTML = state.articles.map(article => `<option value="${article.id}">${escapeHtml(article.title)}</option>`).join("");
-  if (curAdaptArticle) adaptArticleEl.value = curAdaptArticle;
-  const adaptPlatformEl = $("#adaptPlatform");
-  const curAdaptPlatform = adaptPlatformEl.value;
-  adaptPlatformEl.innerHTML = state.platforms
-    .filter(platform => platform.status !== "paused")
-    .map(platform => `<option value="${platform.id}">${escapeHtml(platform.name)}${platform.account_name ? ` / ${escapeHtml(platform.account_name)}` : ""}</option>`)
-    .join("");
-  if (curAdaptPlatform) adaptPlatformEl.value = curAdaptPlatform;
-}
-
 // --- GEO Questions ---
 
 function renderGeoQuestions() {
-  const productOptions = state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-  // 保留 geoProduct 选中值
-  const gpEl = $("#geoProduct");
-  const curGeoProduct = gpEl.value;
-  gpEl.innerHTML = productOptions;
-  // 恢复选中值；若当前值无效（首次加载或对应产品已删除），回退到第一个产品
-  if (curGeoProduct && Array.from(gpEl.options).some(o => o.value === curGeoProduct)) {
-    gpEl.value = curGeoProduct;
-  } else if (state.products.length) {
-    gpEl.value = state.products[0].id;
-  }
-  // geoPromptProduct 默认选第一个产品（AI 生成问题库区域）
-  const gppEl = $("#geoPromptProduct");
-  const curGpp = gppEl.value;
-  gppEl.innerHTML = productOptions;
-  if (curGpp && Array.from(gppEl.options).some(o => o.value === curGpp)) {
-    gppEl.value = curGpp;
-  } else if (state.products.length) {
-    gppEl.value = state.products[0].id;
-  }
-  const filterOpts = `<option value="">全部产品</option>` + productOptions;
-  const geoFilterEl = $("#geoFilterProduct");
-  if (geoFilterEl) {
-    const currentVal = geoFilterEl.value;
-    geoFilterEl.innerHTML = filterOpts;
-    geoFilterEl.value = currentVal;
+  // 按当前产品详情页的产品过滤
+  const currentProductId = ($("#pdId")?.value) || "";
+  if (!currentProductId) {
+    $("#geoQuestionList").innerHTML = "";
+    $("#pdGeoCount").textContent = "0";
+    return;
   }
 
-  // Filter by product and search
-  const filterProduct = ($("#geoFilterProduct")?.value || "").trim();
+  // 同步隐藏字段 geoProduct
+  const gpEl = $("#geoProduct");
+  if (gpEl) gpEl.value = currentProductId;
+
   const query = ($("#geoSearch")?.value || "").trim().toLowerCase();
   const list = state.geo_questions.filter(item => {
-    if (filterProduct && String(item.product_id) !== filterProduct) return false;
-    const text = `${item.question} ${item.intent} ${item.audience} ${item.content_angle} ${item.target_platform} ${item.product_name}`.toLowerCase();
+    if (String(item.product_id) !== currentProductId) return false;
+    const text = `${item.question} ${item.intent} ${item.audience} ${item.content_angle} ${item.target_platform}`.toLowerCase();
     return !query || text.includes(query);
   });
+
+  // 更新 Tab 角标
+  const totalCount = state.geo_questions.filter(q => String(q.product_id) === currentProductId).length;
+  $("#pdGeoCount").textContent = String(totalCount);
+
   $("#geoQuestionList").innerHTML = list.map(item => {
     const cov = (state.coverage?.by_question || []).find(c => c.geo_question_id === item.id);
     const articles = cov?.articles || 0;
@@ -325,7 +413,7 @@ function renderGeoQuestions() {
     const coverTag = articles > 0
       ? `<span class="tag covered">已覆盖 ${articles} 篇${published ? ` · 已发布 ${published}` : ""}</span>`
       : `<span class="tag uncovered">未覆盖</span>`;
-    const metaParts = [escapeHtml(item.product_name), escapeHtml(item.intent), escapeHtml(item.audience)].filter(Boolean);
+    const metaParts = [escapeHtml(item.intent), escapeHtml(item.audience)].filter(Boolean);
     return `
     <article class="card geo-question-card ${item.status}">
       <div class="panel-heading">
@@ -346,7 +434,7 @@ function renderGeoQuestions() {
       </div>
     </article>
   `;
-  }).join("") || (state.geo_questions.length ? `<div class="search-empty">没有找到匹配的问题</div>` : emptyStateWithAction("还没有 GEO 问题", "Q", `<button class="ghost" data-action="jump" data-target="geo">新增 GEO 问题</button>`));
+  }).join("") || (totalCount ? `<div class="search-empty">没有找到匹配的问题</div>` : emptyStateWithAction("还没有 GEO 问题", "Q", `<button class="ghost" data-action="toggle-geo-form">新增第一个问题</button>`));
 }
 
 function selectGeoQuestion(id) {
@@ -362,24 +450,94 @@ function selectGeoQuestion(id) {
   $("#geoAngle").value = item.content_angle || "";
   $("#geoPlatform").value = item.target_platform || "";
   $("#geoQuestionFormTitle").textContent = "编辑 GEO 问题";
+  $("#geoQuestionForm").style.display = "";
+  $("#geoQuestionText")?.focus();
 }
 
 function resetGeoQuestionForm() {
+  const currentProductId = $("#pdId")?.value || "";
   $("#geoQuestionForm").reset();
   $("#geoQuestionId").value = "";
-  $("#geoProduct").selectedIndex = 0; // 重置下拉框到第一个选项
+  $("#geoProduct").value = currentProductId; // 保持当前产品
   $("#geoPriority").value = "medium";
   $("#geoStatus").value = "active";
   $("#geoQuestionFormTitle").textContent = "新增 GEO 问题";
+}
+
+// --- Workshop ---
+
+function renderWorkshop() {
+  const wsProductEl = $("#workshopProduct");
+  if (!wsProductEl) return;
+  const curVal = wsProductEl.value;
+  wsProductEl.innerHTML = `<option value="">请选择产品…</option>` + state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  if (curVal && Array.from(wsProductEl.options).some(o => o.value === curVal)) {
+    wsProductEl.value = curVal;
+  }
+
+  // 填充导入文章的产品选择
+  const importProductEl = $("#importArticleProduct");
+  if (importProductEl) {
+    const curImportVal = importProductEl.value;
+    importProductEl.innerHTML = `<option value="">请选择产品…</option>` + state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    if (curImportVal && Array.from(importProductEl.options).some(o => o.value === curImportVal)) {
+      importProductEl.value = curImportVal;
+    }
+  }
+
+  // 填充导入文章的 GEO 问题选择
+  const importGeoEl = $("#importArticleGeoQuestion");
+  if (importGeoEl) {
+    const curGeoVal = importGeoEl.value;
+    const importProductId = importProductEl?.value || "";
+    const qs = state.geo_questions.filter(q => !importProductId || String(q.product_id) === importProductId);
+    importGeoEl.innerHTML = `<option value="">未关联</option>` +
+      qs.map(q => `<option value="${q.id}">${escapeHtml(q.question)}</option>`).join("");
+    if (curGeoVal && Array.from(importGeoEl.options).some(o => o.value === curGeoVal)) {
+      importGeoEl.value = curGeoVal;
+    }
+  }
+
+  const enabled = state.platforms.filter(p => p.status === "enabled").slice(0, 40);
+  const groups = {};
+  enabled.forEach(p => {
+    const cat = p.category || "其他";
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(p);
+  });
+  const wsPlatformsEl = $("#workshopPlatforms");
+  if (wsPlatformsEl) {
+    wsPlatformsEl.innerHTML = Object.entries(groups).map(([cat, platforms]) => `
+      <div class="workshop-platform-group">
+        <p class="workshop-platform-group-title">${escapeHtml(cat)}</p>
+        <div class="workshop-platform-row">
+          ${platforms.map(p => `<label title="${escapeHtml(p.notes || "")}"><input type="checkbox" value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</label>`).join("")}
+        </div>
+      </div>
+    `).join("");
+  }
 }
 
 // --- AI Settings ---
 
 function renderAiSettings() {
   const ai = state.ai_settings || {};
-  $("#aiPreset").innerHTML = `<option value="">选择后自动填充</option>` + aiPresets.map((preset, index) => `
-    <option value="${index}">${escapeHtml(preset.name)}</option>
-  `).join("");
+  // 系统预设 + 用户自定义模型
+  const presets = aiPresets.map((p, i) => ({ ...p, index: i, type: "system" }));
+  const customs = (state.user_models || []).map(m => ({ ...m, type: "custom" }));
+  const allOptions = [
+    { label: "--- 系统预设 ---", value: "", disabled: true },
+    ...presets.map(p => ({ label: p.name, value: String(p.index) })),
+    { label: "--- 我的模型 ---", value: "", disabled: true },
+    ...customs.map(m => ({ label: "⭐ " + m.name, value: "custom_" + m.id })),
+  ];
+  const curVal = $("#aiPreset").value;
+  $("#aiPreset").innerHTML = allOptions.map(o =>
+    `<option value="${escapeHtml(o.value)}"${o.disabled ? " disabled" : ""}>${escapeHtml(o.label)}</option>`
+  ).join("");
+  if (curVal && Array.from($("#aiPreset").options).some(o => o.value === curVal)) {
+    $("#aiPreset").value = curVal;
+  }
   $("#aiMode").value = ai.mode || "manual";
   $("#textBaseUrl").value = ai.text_base_url || ai.base_url || "https://open.bigmodel.cn/api/paas/v4";
   $("#textModel").value = ai.text_model || ai.model || "glm-4-flash";
@@ -388,6 +546,65 @@ function renderAiSettings() {
   $("#aiTemperature").value = ai.temperature || 0.7;
   $("#textKeyStatus").textContent = ai.has_text_api_key ? "已保存文本模型 Key，留空不会覆盖" : "未保存文本模型 Key";
   $("#imageKeyStatus").textContent = ai.has_image_api_key ? "已保存图片模型 Key，留空不会覆盖" : "未保存图片模型 Key";
+
+  // 更新顶栏模型标签
+  updateCurrentModelLabel();
+}
+
+// 更新顶栏当前模型显示
+function updateCurrentModelLabel() {
+  const el = $("#currentModelLabel");
+  if (!el) return;
+  const ai = state.ai_settings || {};
+  const model = ai.text_model || ai.model;
+  const mode = ai.mode || "manual";
+  if (mode === "api" && model) {
+    el.textContent = "🤖 " + model;
+    el.className = "current-model";
+    el.title = "当前模型: " + model + " | 点击进入 AI 设置";
+  } else {
+    el.textContent = "⚙ 未配置模型";
+    el.className = "current-model unconfigured";
+    el.title = "点击配置 AI 模型";
+  }
+}
+
+function renderUserModels() {
+  const models = state.user_models || [];
+  $("#userModelsList").innerHTML = models.length
+    ? models.map(m => `
+      <div class="user-model-card">
+        <div>
+          <strong>${escapeHtml(m.name)}</strong>
+          <span class="muted">${escapeHtml(m.provider || "")}</span>
+        </div>
+        <div class="muted small">${escapeHtml(m.text_model || "")}${m.image_model ? " + " + escapeHtml(m.image_model) : ""}</div>
+        <div class="button-row mini-actions">
+          <button class="ghost use-user-model" data-id="${m.id}">使用</button>
+          <button class="ghost edit-user-model" data-id="${m.id}">编辑</button>
+          <button class="ghost danger delete-user-model" data-id="${m.id}">删除</button>
+        </div>
+      </div>
+    `).join("")
+    : `<div class="empty-state"><p class="empty-state-title">还没有自定义模型，点击上方添加</p></div>`;
+}
+
+function renderSystemPresets() {
+  $("#systemPresetsList").innerHTML = aiPresets.map(p => `
+    <div class="user-model-card system-preset">
+      <div>
+        <strong>${escapeHtml(p.name)}</strong>
+        <span class="tag">${escapeHtml(p.provider)}</span>
+      </div>
+      <div class="muted small">文本：${escapeHtml(p.text_model)}${p.image_model ? " · 图片：" + escapeHtml(p.image_model) : ""}</div>
+    </div>
+  `).join("");
+}
+
+function renderSettings() {
+  renderAiSettings();
+  renderUserModels();
+  renderSystemPresets();
 }
 
 // --- Articles ---
@@ -410,7 +627,7 @@ function renderArticles() {
   const agEl = $("#articleGeoQuestion");
   if (agEl) {
     const curQ = agEl.value;
-    const productId = Number(apEl.value || 0);
+    const productId = apEl.value || "";
     const qs = state.geo_questions.filter(q => !productId || q.product_id === productId);
     agEl.innerHTML = `<option value="0">未关联（不影响覆盖率统计）</option>` +
       qs.map(q => `<option value="${q.id}">${escapeHtml(q.question)}</option>`).join("");
@@ -444,20 +661,28 @@ function renderArticles() {
   $("#articleList").innerHTML = filtered.map(article => {
     const geoQ = state.geo_questions.find(q => q.id === article.geo_question_id);
     const parts = [escapeHtml(article.target_platform), escapeHtml(article.content_type), geoQ ? escapeHtml(geoQ.question) : ""].filter(Boolean);
+    const quality = typeof calcContentQuality === "function" ? calcContentQuality(article.body, article.title) : { score: 0, label: "", level: "low" };
     return `
     <article class="article-row ${article.id === state.selectedArticleId ? "active" : ""}" data-id="${article.id}">
-      <h3>${escapeHtml(article.title)}</h3>
+      <div class="article-row-head">
+        <h4>${escapeHtml(article.title)}</h4>
+        ${quality.score > 0 ? `<span class="quality-score ${quality.level}" title="内容质量评分">${quality.score}分 · ${quality.label}</span>` : ""}
+      </div>
       ${parts.length ? `<p class="muted">${parts.join(" · ")}</p>` : ""}
       <div class="tagline">
         <span class="tag">${escapeHtml(article.status)}</span>
         ${(article.tags || "").split(",").filter(Boolean).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag.trim())}</span>`).join("")}
       </div>
     </article>`;
-  }).join("") || (state.articles.length ? `<div class="search-empty">没有找到匹配的文章</div>` : emptyStateWithAction("文章库为空", "📝", `<button class="ghost" data-action="jump" data-target="generator">去生成文章</button>`));
+  }).join("") || (state.articles.length ? `<div class="search-empty">没有找到匹配的文章</div>` : emptyStateWithAction("文章库为空", "📝", `<button class="ghost" data-action="jump" data-target="workshop">去内容工坊</button>`));
 
   $("#taskArticlePicker").innerHTML = state.articles.map(article => `
     <label><input type="checkbox" value="${article.id}">${escapeHtml(article.title)}</label>
   `).join("");
+
+  // 更新「已生成」Tab 角标
+  const tabCount = $("#workshopGeneratedCount");
+  if (tabCount) tabCount.textContent = String(state.articles.length);
 }
 
 function setArticleEditorMode(editing) {
@@ -471,7 +696,6 @@ function selectArticle(id) {
   const article = state.articles.find(a => a.id === id);
   if (!article) return;
   state.selectedArticleId = id;
-  state.selectedArticleProductId = article.product_id;
   setArticleEditorMode(true);
   $("#articleId").value = article.id;
   $("#articleProduct").value = article.product_id || 0;
@@ -488,7 +712,8 @@ function selectArticle(id) {
   $("#articleStatus").value = article.status || "draft";
   renderArticles();
   renderPreview();
-  updateWordCount();
+  // 切到「已生成」Tab 让用户编辑
+  switchWorkshopTab("generated");
 }
 
 function updateWordCount() {
@@ -521,34 +746,85 @@ function renderPlatforms() {
     const text = `${p.name} ${p.category} ${p.content_style} ${p.notes} ${p.account_name} ${p.login_notes}`.toLowerCase();
     return !query || text.includes(query);
   });
-  $("#platformGrid").innerHTML = list.map(platform => {
-    const metaParts = [escapeHtml(platform.category), escapeHtml(platform.recommended_words)].filter(Boolean);
+
+  // 按 category 分组
+  const groups = {};
+  list.forEach(p => {
+    const cat = p.category || "其他";
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(p);
+  });
+
+  const cardHtml = (platform) => {
+    const isEnabled = platform.status === "enabled";
+    const statusLabel = isEnabled ? "启用" : "观察";
+    // 首字母作为 avatar（中文取首字，英文取首字母大写）
+    const initial = (platform.name || "?").trim().charAt(0).toUpperCase();
+    // 外链 / 软文适配度映射为可读标签
+    const linkMap = { allowed: "✓ 可外链", limited: "⚠ 限外链", forbidden: "✕ 禁外链" };
+    const fitMap = { high: "高适配", medium: "中适配", low: "低适配" };
+    const linkLabel = linkMap[platform.allows_external_links] || "— 外链";
+    const fitLabel = fitMap[platform.soft_article_fit] || "— 适配";
+    const fitTone = platform.soft_article_fit === "high" ? "good" : (platform.soft_article_fit === "low" ? "warn" : "");
     return `
-    <article class="platform-card ${platform.id === state.selectedPlatformId ? "active" : ""}">
-      <div class="panel-heading">
-        <h3>${escapeHtml(platform.name)}</h3>
-        <span class="status ${escapeHtml(platform.status)}">${escapeHtml(platform.status)}</span>
+    <article class="platform-card ${isEnabled ? "enabled" : "watch"} ${platform.id === state.selectedPlatformId ? "active" : ""}" data-id="${platform.id}">
+      <div class="platform-card-head">
+        <div class="platform-avatar" aria-hidden="true">${escapeHtml(initial)}</div>
+        <div class="platform-card-title">
+          <h3>${escapeHtml(platform.name)}</h3>
+          <span class="platform-status-dot ${isEnabled ? "on" : "off"}"></span>
+          <span class="platform-status-text">${statusLabel}</span>
+        </div>
       </div>
-      ${metaParts.length ? `<p class="muted">${metaParts.join(" · ")}</p>` : ""}
-      ${platform.account_name ? `<p class="muted">账号：${escapeHtml(platform.account_name)}</p>` : ""}
-      <p>${escapeHtml(platform.content_style)}</p>
-      <div class="tagline">
-        <span class="tag">外链：${escapeHtml(platform.allows_external_links || "-")}</span>
-        <span class="tag">软文：${escapeHtml(platform.soft_article_fit || "-")}</span>
+      ${platform.content_style ? `<p class="platform-desc">${escapeHtml(platform.content_style)}</p>` : ""}
+      <div class="platform-meta">
+        ${platform.recommended_words ? `<div class="platform-meta-item"><span class="meta-label">字数</span><span class="meta-value">${escapeHtml(platform.recommended_words)}</span></div>` : ""}
+        ${platform.frequency ? `<div class="platform-meta-item"><span class="meta-label">频次</span><span class="meta-value">${escapeHtml(platform.frequency)}</span></div>` : ""}
       </div>
-      <div class="button-row">
-        <button class="ghost open-platform" data-url="${escapeHtml(platform.url)}">打开</button>
-        <button class="ghost edit-platform" data-id="${platform.id}">编辑</button>
-        <button class="ghost toggle-platform" data-id="${platform.id}" data-status="${platform.status === "enabled" ? "watch" : "enabled"}">${platform.status === "enabled" ? "观察" : "启用"}</button>
-        <button class="ghost delete-platform" data-id="${platform.id}">删除</button>
+      <div class="platform-chips">
+        <span class="chip ${fitTone}">${fitLabel}</span>
+        <span class="chip">${linkLabel}</span>
+        ${platform.account_name ? `<span class="chip muted">@${escapeHtml(platform.account_name)}</span>` : ""}
       </div>
-    </article>
-  `}).join("") || (state.platforms.length ? `<div class="search-empty">没有找到匹配的平台</div>` : emptyStateWithAction("没有平台", "🔍", `<button class="ghost" data-action="jump" data-target="platforms">新增平台</button>`));
+      <div class="platform-actions">
+        <button class="btn ghost sm open-platform" data-url="${escapeHtml(platform.url || "")}" title="跳转到平台">打开 ↗</button>
+        <button class="btn ghost sm edit-platform" data-id="${platform.id}">编辑</button>
+        <button class="btn ghost sm toggle-platform" data-id="${platform.id}" data-status="${isEnabled ? "watch" : "enabled"}">${isEnabled ? "观察" : "启用"}</button>
+        <button class="btn ghost sm danger delete-platform" data-id="${platform.id}">删除</button>
+      </div>
+    </article>`;
+  };
+
+  // 分类图标映射
+  const categoryIcons = {
+    "综合资讯": "📰", "社区社交": "💬", "视频平台": "▶",
+    "技术社区": "⚙", "海外平台": "🌍", "其他": "📁",
+  };
+
+  if (!list.length) {
+    $("#platformGrid").innerHTML = state.platforms.length
+      ? `<div class="search-empty">没有找到匹配的平台</div>`
+      : emptyStateWithAction("还没有平台", "🔍", `<button class="ghost" data-action="switch-platform-add">去新增平台</button>`);
+  } else {
+    $("#platformGrid").innerHTML = Object.entries(groups).map(([cat, items]) => `
+      <div class="platform-category-group">
+        <span class="cat-icon" aria-hidden="true">${categoryIcons[cat] || "📁"}</span>
+        <h3>${escapeHtml(cat)}</h3>
+        <span class="count">${items.length}</span>
+        <span class="cat-line"></span>
+      </div>
+      ${items.map(cardHtml).join("")}
+    `).join("");
+  }
 
   const enabled = state.platforms.filter(p => p.status === "enabled");
   $("#taskPlatformPicker").innerHTML = enabled.map(platform => `
     <label><input type="checkbox" value="${platform.id}">${escapeHtml(platform.name)}${platform.account_name ? ` / ${escapeHtml(platform.account_name)}` : ""}</label>
   `).join("");
+
+  // 更新 Tab 角标
+  const cnt = $("#platformListCount");
+  if (cnt) cnt.textContent = String(state.platforms.length);
 }
 
 function selectPlatform(id) {
@@ -570,7 +846,8 @@ function selectPlatform(id) {
   $("#platformFit").value = platform.soft_article_fit || "medium";
   $("#platformStatus").value = platform.status || "enabled";
   $("#platformNotes").value = platform.notes || "";
-  $("#platformFormTitle").textContent = "编辑平台账号";
+  $("#platformFormTitle").textContent = "编辑平台";
+  switchSubTab("platform-add");
   renderPlatforms();
 }
 
@@ -578,8 +855,8 @@ function resetPlatformForm() {
   state.selectedPlatformId = null;
   $("#platformForm").reset();
   $("#platformId").value = "";
-  $("#platformFormTitle").textContent = "平台账号";
-  $("#platformLinks").value = "limited";
+  $("#platformFormTitle").textContent = "新增平台";
+  $("#platformLinks").value = "allowed";
   $("#platformFit").value = "medium";
   $("#platformStatus").value = "enabled";
   renderPlatforms();
@@ -588,31 +865,162 @@ function resetPlatformForm() {
 // --- Tasks ---
 
 function renderTasks() {
-  $("#taskBoardViewBtn")?.classList.toggle("active", state.taskView === "board");
-  $("#taskCalendarViewBtn")?.classList.toggle("active", state.taskView === "calendar");
-  if (state.taskView === "calendar") {
-    $("#taskBoard").style.display = "none";
-    $("#taskCalendar").style.display = "grid";
-    renderTaskCalendar();
-  } else {
-    $("#taskBoard").style.display = "grid";
-    $("#taskCalendar").style.display = "none";
-    renderTaskBoard();
+  renderTaskStats();
+  renderTaskForm();
+  renderTaskStatFilters();
+  renderTaskBoardStats();
+  renderTaskBoard();
+  renderTaskCalendar();
+}
+
+// 渲染新建发布记录表单的下拉选项
+function renderTaskForm() {
+  // 产品
+  const pEl = $("#taskFormProduct");
+  if (pEl) {
+    const cur = pEl.value;
+    pEl.innerHTML = `<option value="">请选择产品…</option>` +
+      state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    pEl.value = cur;
+  }
+  // 内容（按产品过滤）
+  const aEl = $("#taskFormArticle");
+  if (aEl) {
+    const curA = aEl.value;
+    const pid = pEl?.value || "";
+    const arts = pid ? state.articles.filter(a => String(a.product_id) === pid) : state.articles;
+    aEl.innerHTML = `<option value="">请选择内容…</option>` +
+      arts.map(a => `<option value="${a.id}">${escapeHtml(a.title || "未命名")}</option>`).join("");
+    aEl.value = curA;
+  }
+  // 平台
+  const plEl = $("#taskFormPlatform");
+  if (plEl) {
+    const curP = plEl.value;
+    plEl.innerHTML = `<option value="">请选择平台…</option>` +
+      state.platforms.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    plEl.value = curP;
   }
 }
 
-function getFilteredTasks() {
+function renderTaskStatFilters() {
+  const pEl = $("#taskStatProduct");
+  if (pEl) {
+    const cur = pEl.value;
+    pEl.innerHTML = `<option value="">全部产品</option>` +
+      state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    pEl.value = cur;
+  }
+  const plEl = $("#taskStatPlatform");
+  if (plEl) {
+    const cur = plEl.value;
+    plEl.innerHTML = `<option value="">全部平台</option>` +
+      state.platforms.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    plEl.value = cur;
+  }
+}
+
+// 看板视图：分产品 / 分平台 统计卡片
+function renderTaskBoardStats() {
+  const selectedProduct = $("#taskStatProduct")?.value || "";
+  const selectedPlatform = $("#taskStatPlatform")?.value || "";
+
+  const byProductEl = $("#taskStatByProduct");
+  if (byProductEl) {
+    const products = selectedProduct
+      ? state.products.filter(p => String(p.id) === selectedProduct)
+      : state.products;
+    byProductEl.innerHTML = products.map(product => {
+      const tasks = state.tasks.filter(t =>
+        String(t.product_id) === String(product.id) &&
+        (!selectedPlatform || String(t.platform_id) === selectedPlatform)
+      );
+      return taskStatCard(product.name, tasks);
+    }).join("") || `<p class="muted">暂无产品</p>`;
+  }
+
+  const byPlatformEl = $("#taskStatByPlatform");
+  if (byPlatformEl) {
+    const platforms = selectedPlatform
+      ? state.platforms.filter(p => String(p.id) === selectedPlatform)
+      : state.platforms;
+    byPlatformEl.innerHTML = platforms.map(platform => {
+      const tasks = state.tasks.filter(t =>
+        String(t.platform_id) === String(platform.id) &&
+        (!selectedProduct || String(t.product_id) === selectedProduct)
+      );
+      return taskStatCard(platform.name, tasks);
+    }).join("") || `<p class="muted">暂无平台</p>`;
+  }
+}
+
+function taskStatCard(name, tasks) {
+  const total = tasks.length;
+  const published = tasks.filter(t => t.status === "published").length;
+  const todo = tasks.filter(t => t.status === "todo").length;
+  const rate = total ? Math.round((published / total) * 100) : 0;
+  return `
+    <div class="task-stat-mini">
+      <div class="task-stat-mini-name">${escapeHtml(name)}</div>
+      <div class="task-stat-mini-num">${total}</div>
+      <div class="task-stat-mini-meta">已发布 ${published} · 待发布 ${todo} · ${rate}%</div>
+    </div>
+  `;
+}
+
+// 发布统计卡片：状态分布 + 平台覆盖
+function renderTaskStats() {
+  const bar = $("#taskStatsBar");
+  if (!bar) return;
+  const tasks = state.tasks || [];
+  const total = tasks.length;
+  const byStatus = {
+    published: tasks.filter(t => t.status === "published").length,
+    todo: tasks.filter(t => t.status === "todo").length,
+    revise: tasks.filter(t => t.status === "revise").length,
+    skipped: tasks.filter(t => t.status === "skipped").length,
+  };
+  const publishedRate = total ? Math.round((byStatus.published / total) * 100) : 0;
+  // 平台覆盖：统计有多少个平台已有发布记录
+  const platformsWithPublish = new Set(
+    tasks.filter(t => t.status === "published" && t.platform_id).map(t => t.platform_id)
+  );
+  const totalPlatforms = state.platforms.filter(p => p.status === "enabled").length;
+  const platformCov = totalPlatforms ? Math.round((platformsWithPublish.size / totalPlatforms) * 100) : 0;
+
+  const cards = [
+    { label: "发布任务", value: total, hint: "总记录数", tone: "neutral" },
+    { label: "已发布", value: byStatus.published, hint: `占比 ${publishedRate}%`, tone: "good" },
+    { label: "待发布", value: byStatus.todo, hint: byStatus.revise ? `需修改 ${byStatus.revise}` : "等待执行", tone: "warn" },
+    { label: "平台覆盖", value: `${platformsWithPublish.size}/${totalPlatforms}`, hint: `覆盖率 ${platformCov}%`, tone: "accent" },
+  ];
+  bar.innerHTML = cards.map(c => `
+    <div class="task-stat-card tone-${c.tone}">
+      <div class="task-stat-value">${c.value}</div>
+      <div class="task-stat-label">${escapeHtml(c.label)}</div>
+      <div class="task-stat-hint">${escapeHtml(c.hint)}</div>
+    </div>
+  `).join("");
+}
+
+function getFilteredTasks(useStatFilters = false) {
   const query = ($("#taskSearch")?.value || "").trim().toLowerCase();
+  const productId = useStatFilters ? ($("#taskStatProduct")?.value || "") : "";
+  const platformId = useStatFilters ? ($("#taskStatPlatform")?.value || "") : "";
   return state.tasks.filter(task => {
-    const text = `${task.article_title} ${task.platform_name} ${task.platform_account_name} ${task.article_tags}`.toLowerCase();
-    return !query || text.includes(query);
+    const text = [task.article_title, task.platform_name, task.platform_account_name, task.article_tags]
+      .filter(Boolean).join(" ").toLowerCase();
+    if (query && !text.includes(query)) return false;
+    if (productId && String(task.product_id || "") !== String(productId)) return false;
+    if (platformId && String(task.platform_id || "") !== String(platformId)) return false;
+    return true;
   });
 }
 
 function renderTaskBoard() {
   const groups = ["todo", "published", "revise", "skipped"];
   const labels = { todo: "待发布", published: "已发布", revise: "需修改", skipped: "已跳过" };
-  const tasks = getFilteredTasks();
+  const tasks = getFilteredTasks(true);
   const hasResults = tasks.length > 0;
   $("#taskBoard").innerHTML = groups.map(status => {
     const groupTasks = tasks.filter(task => task.status === status);
@@ -680,8 +1088,9 @@ function renderTaskCalendar() {
 
 function taskRow(task) {
   const metaParts = [escapeHtml(task.platform_name), escapeHtml(task.platform_category), task.platform_account_name ? `账号：${escapeHtml(task.platform_account_name)}` : ""].filter(Boolean);
+  const isPublished = task.status === "published" && task.published_url;
   return `
-    <article class="task-row">
+    <article class="task-row ${isPublished ? 'published' : ''}">
       <h3>${escapeHtml(task.article_title)}</h3>
       ${metaParts.length ? `<p class="muted">${metaParts.join(" · ")}</p>` : ""}
       ${task.platform_login_notes ? `<p class="hint compact-hint">${escapeHtml(task.platform_login_notes)}</p>` : ""}
@@ -695,9 +1104,11 @@ function taskRow(task) {
             <button class="ghost task-copy" data-id="${task.id}" data-kind="title">复制标题</button>
             <button class="ghost task-copy" data-id="${task.id}" data-kind="body">复制正文</button>
             <button class="ghost task-copy" data-id="${task.id}" data-kind="all">复制整包</button>
+            ${isPublished ? `<button class="ghost task-copy share" data-id="${task.id}" data-kind="share">📤 分享链接</button>` : ""}
           </div>
         </div>
-        <button class="solid task-status" data-id="${task.id}" data-status="published">已发布</button>
+        ${isPublished ? `<button class="ghost task-share-card" data-id="${task.id}" title="生成分享卡片">✨ 分享</button>` : ""}
+        <button class="${isPublished ? 'ghost' : 'solid'} task-status" data-id="${task.id}" data-status="published">已发布</button>
         <button class="ghost task-status" data-id="${task.id}" data-status="revise">需修改</button>
         <button class="ghost task-status" data-id="${task.id}" data-status="skipped">跳过</button>
         <button class="ghost danger task-delete" data-id="${task.id}">删除</button>
@@ -710,6 +1121,15 @@ function taskCopyText(task, kind) {
   if (kind === "title") return task.article_title || "";
   if (kind === "body") return task.article_body || "";
   if (kind === "tags") return task.article_tags || "";
+  if (kind === "share") {
+    const userName = typeof getCurrentUserName === "function" ? getCurrentUserName() : "";
+    const parts = [];
+    parts.push(`📝 ${task.article_title || ""}`);
+    if (userName) parts.push(`✍️ ${userName}`);
+    if (task.published_url) parts.push(`🔗 ${task.published_url}`);
+    parts.push("\n—— 来自 GEO Studio");
+    return parts.join("\n");
+  }
   return [
     `标题：${task.article_title || ""}`,
     "",
@@ -734,16 +1154,17 @@ function renderGeneratedImage(result, baseUrl = "") {
   }
   let src;
   const raw = String(url);
-  if (raw.startsWith("http") || raw.startsWith("data:")) {
+  if (raw.startsWith("http") || raw.startsWith("data:image/")) {
     src = raw;
   } else if (/^[A-Za-z0-9+/=]+$/.test(raw) && raw.length > 100) {
-    // 纯 base64 字符串
     src = `data:image/png;base64,${raw}`;
-  } else if (baseUrl) {
-    // 相对路径：拼接 image base_url 兜底
+  } else if (baseUrl && !raw.startsWith("javascript:")) {
     src = baseUrl.replace(/\/+$/, "") + "/" + raw.replace(/^\/+/, "");
-  } else {
+  } else if (!raw.startsWith("javascript:")) {
     src = raw;
+  } else {
+    $("#imageResult").innerHTML = `<pre>无效的图片 URL</pre>`;
+    return;
   }
   $("#imageResult").innerHTML = `
     <figure>
@@ -844,14 +1265,19 @@ function validateArticle(payload) {
   const errors = [];
   const title = (payload.title || "").trim();
   const body = (payload.body || "").trim();
-  const productId = Number(payload.product_id || 0);
+  const productId = payload.product_id || "";
   const targetPlatform = (payload.target_platform || "").trim();
+  const status = payload.status || "draft";
+  const isDraft = status === "draft";
 
   if (!title) errors.push("文章标题不能为空");
   if (title.length > 500) errors.push("文章标题不能超过 500 字");
-  if (body.length < 50) errors.push("正文内容过少，建议至少 50 字");
-  if (!productId) errors.push("请选择关联产品");
-  if (!targetPlatform) errors.push("请选择目标发布平台");
+  // 草稿可更宽松：允许空正文；非草稿必须满足完整度
+  if (!isDraft) {
+    if (body.length < 50) errors.push("正文内容过少，建议至少 50 字");
+    if (!productId || productId === "0") errors.push("请选择关联产品");
+    if (!targetPlatform) errors.push("请选择目标发布平台");
+  }
 
   const product = state.products.find(p => p.id === productId);
   if (product && product.forbidden_words) {

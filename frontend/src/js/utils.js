@@ -10,14 +10,14 @@ async function api(path, options = {}) {
 }
 
 // --- Toast ---
-
+// 兼容旧调用：所有 toast() 调用统一走新的 showToast（enhancements.js 提供）
 function toast(message, type = "default") {
-  const el = $("#toast");
-  el.textContent = message;
-  el.className = `toast ${type}`;
-  requestAnimationFrame(() => el.classList.add("show"));
-  clearTimeout(el._timer);
-  el._timer = setTimeout(() => el.classList.remove("show"), 3500);
+  if (typeof showToast === "function") {
+    showToast(message, type);
+  } else {
+    // 极端情况下 showToast 还未加载，使用简单 fallback
+    console.log(`[toast:${type}]`, message);
+  }
 }
 
 // --- HTML Utilities ---
@@ -27,15 +27,12 @@ function escapeHtml(value = "") {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
-}
-
-function emptyState(message, icon = "📄") {
-  return `<div class="empty-state"><div class="empty-state-icon">${icon}</div><p class="empty-state-title">${message}</p></div>`;
 }
 
 function emptyStateWithAction(message, icon = "📄", actionHtml = "") {
@@ -97,11 +94,57 @@ async function copyToClipboard(text) {
 // --- Checkbox Helpers ---
 
 function selectedValues(selector) {
-  return $$(`${selector} input:checked`).map(input => Number(input.value));
+  return $$(`${selector} input:checked`).map(input => input.value);
 }
 
 function selectedTextValues(selector) {
   return $$(`${selector} input:checked`).map(input => input.value);
+}
+
+// --- Input Validation ---
+
+function validateUrl(url) {
+  if (!url) return true; // URL是可选的
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validateEmail(email) {
+  if (!email) return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+function validateStringLength(str, min = 0, max = Infinity) {
+  if (!str) return min === 0;
+  const len = str.trim().length;
+  return len >= min && len <= max;
+}
+
+function validateNumberRange(num, min = -Infinity, max = Infinity) {
+  if (num === null || num === undefined || num === '') return false;
+  const n = Number(num);
+  return !isNaN(n) && n >= min && n <= max;
+}
+
+function validateRequired(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return true;
+}
+
+function sanitizeInput(str) {
+  if (!str) return '';
+  // 移除潜在的危险字符
+  return str
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+\s*=/gi, '')
+    .trim();
 }
 
 // --- JSON Parsing ---
@@ -148,13 +191,33 @@ function formatLocalNow() {
 // --- Markdown ---
 
 function markdownToHtml(text) {
-  return escapeHtml(text)
-    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-    .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+  if (!text) return "";
+  const lines = escapeHtml(text).split("\n");
+  let html = [];
+  let inList = false;
+  let inQuote = false;
+  for (let line of lines) {
+    // 标题
+    let m;
+    if (m = line.match(/^### (.*)$/)) { if (inList) { html.push("</ul>"); inList = false; } if (inQuote) { html.push("</blockquote>"); inQuote = false; } html.push(`<h3>${m[1]}</h3>`); continue; }
+    if (m = line.match(/^## (.*)$/)) { if (inList) { html.push("</ul>"); inList = false; } if (inQuote) { html.push("</blockquote>"); inQuote = false; } html.push(`<h2>${m[1]}</h2>`); continue; }
+    if (m = line.match(/^# (.*)$/)) { if (inList) { html.push("</ul>"); inList = false; } if (inQuote) { html.push("</blockquote>"); inQuote = false; } html.push(`<h1>${m[1]}</h1>`); continue; }
+    // 列表
+    if (m = line.match(/^[-*] (.*)$/)) { if (inQuote) { html.push("</blockquote>"); inQuote = false; } if (!inList) { html.push("<ul>"); inList = true; } html.push(`<li>${m[1]}</li>`); continue; }
+    if (inList) { html.push("</ul>"); inList = false; }
+    // 引用
+    if (m = line.match(/^&gt; (.*)$/)) { if (!inQuote) { html.push("<blockquote>"); inQuote = true; } html.push(m[1] + "<br>"); continue; }
+    if (inQuote) { html.push("</blockquote>"); inQuote = false; }
+    // 空行
+    if (!line.trim()) { html.push(""); continue; }
+    // 普通行
+    html.push(line);
+  }
+  if (inList) html.push("</ul>");
+  if (inQuote) html.push("</blockquote>");
+  return html.join("\n")
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(/`(.*?)`/g, '<code>$1</code>')
-    .replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>')
     .replace(/\n/g, '<br>');
 }

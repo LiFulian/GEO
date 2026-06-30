@@ -285,7 +285,7 @@ function extractJsonObject(text) {
  * 调用图片生成，支持图生图（base64）和文生图
  */
 async function callImageGeneration(prompt, articleId) {
-  const aiSettings = window.state && window.state.ai_settings;
+  const aiSettings = (typeof state !== "undefined") ? state.ai_settings : null;
   if (!aiSettings) throw new Error("未找到 AI 设置");
 
   const baseUrl = aiSettings.image_base_url || aiSettings.text_base_url || aiSettings.base_url || "";
