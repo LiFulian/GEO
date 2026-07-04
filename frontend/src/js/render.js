@@ -60,6 +60,88 @@ function showView(viewId) {
     setTimeout(loadArticleDraft, 50);
   }
   window.scrollTo({ top: 0, behavior: "smooth" });
+  // 自动选中第一项：若未选中且列表非空，且非路由恢复过程
+  // selectXxx 内部会调用 syncRoute(view, id)，故此处跳过默认 syncRoute
+  if (!_routingGuard && autoPickFirstItem(viewId)) return;
+  syncRoute(viewId);
+}
+
+// 切换视图时若列表非空且未选中项，默认打开第一个详情
+function autoPickFirstItem(viewId) {
+  if (viewId === "products" && !selectedProductId && state.products.length) {
+    selectProduct(state.products[0].id);
+    return true;
+  }
+  if (viewId === "platforms" && !state.selectedPlatformId && state.platforms.length) {
+    selectPlatform(state.platforms[0].id);
+    return true;
+  }
+  if (viewId === "workshop" && !state.selectedArticleId && state.articles.length) {
+    selectArticle(state.articles[0].id);
+    return true;
+  }
+  return false;
+}
+
+// ===== Hash 路由 =====
+// 格式：#view  /  #view/itemId  /  #view/itemId/subTab
+let _routingGuard = false;
+
+function syncRoute(view, itemId, subTab) {
+  if (_routingGuard) return;
+  const parts = [view];
+  if (itemId) parts.push(itemId);
+  if (subTab) parts.push(subTab);
+  const hash = "#" + parts.join("/");
+  if (location.hash !== hash) location.hash = hash;
+}
+
+function parseRoute() {
+  const raw = location.hash.replace(/^#/, "");
+  if (!raw) return { view: "", itemId: "", subTab: "" };
+  const [view, itemId, subTab] = raw.split("/");
+  return { view, itemId: itemId || "", subTab: subTab || "" };
+}
+
+function handleRouteChange() {
+  const { view, itemId, subTab } = parseRoute();
+  if (!view) return;
+  _routingGuard = true;
+  try {
+    showView(view);
+    if (view === "products" && itemId) {
+      if (state.products.find(p => p.id === itemId)) {
+        selectProduct(itemId);
+        // 扁平化后无 Tab，subTab=geo 时滚动到 GEO 区域
+        if (subTab === "geo") {
+          setTimeout(() => {
+            const geoSection = document.querySelector(".pd-geo-section");
+            if (geoSection) geoSection.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 200);
+        }
+      }
+    } else if (view === "platforms" && itemId) {
+      if (state.platforms.find(p => p.id === itemId)) selectPlatform(itemId);
+    } else if (view === "workshop" && itemId) {
+      // 选中对应文章
+      if (state.articles.find(a => a.id === itemId)) selectArticle(itemId);
+    }
+  } finally {
+    _routingGuard = false;
+  }
+}
+
+function initRouter() {
+  window.addEventListener("hashchange", handleRouteChange);
+  // 首次加载若已有 hash，尝试恢复
+  if (location.hash) {
+    // 等数据加载后再恢复
+    setTimeout(() => {
+      if (state.products.length || state.platforms.length || state.articles.length) {
+        handleRouteChange();
+      }
+    }, 100);
+  }
 }
 
 // --- Dashboard ---
@@ -132,7 +214,15 @@ function renderStats() {
     }).join("") || emptyStateWithAction("还没有高优先级问题", "Q", `<button class="ghost" data-action="jump" data-target="products">去产品档案</button>`);
   $$(".question-link").forEach(row => row.addEventListener("click", () => {
     const q = state.geo_questions.find(x => x.id === row.dataset.id);
-    if (q) showProductDetail(q.product_id, "geo");
+    if (q) {
+      showView("products");
+      selectProduct(q.product_id);
+      // 滚动到 GEO 问题区域
+      setTimeout(() => {
+        const geoSection = document.querySelector(".pd-geo-section");
+        if (geoSection) geoSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 300);
+    }
   }));
 
   $("#recentArticles").innerHTML = state.articles.slice(0, 6).map(article => {
@@ -196,10 +286,10 @@ function renderStats() {
   $$(".todo-action-item").forEach(row => row.addEventListener("click", () => {
     const action = row.dataset.action;
     switch(action) {
-      case "coverage": showView("dashboard"); break;
+      case "coverage": showView("products"); break;
       case "drafts":
       case "review":
-        showView("workshop"); switchSubTab("generated"); break;
+        showView("workshop"); break;
       case "tasks":
       case "revise":
         showView("tasks"); break;
@@ -253,20 +343,24 @@ function renderCoverage() {
     const qId = row.dataset.id;
     const q = state.geo_questions.find(x => x.id === qId);
     if (!q) return;
-    showProductDetail(q.product_id, "geo");
+    showView("products");
+    selectProduct(q.product_id);
     // 高亮对应的问题卡片
     setTimeout(() => {
-      const card = $(`.geo-question-card .edit-geo-question[data-id="${qId}"]`)?.closest(".geo-question-card");
+      const card = $(`.geo-question-card[data-id="${qId}"]`);
       if (card) {
         card.classList.add("highlight");
         card.scrollIntoView({ behavior: "smooth", block: "center" });
         setTimeout(() => card.classList.remove("highlight"), 3000);
       }
-    }, 100);
+    }, 300);
   }));
 }
 
 // --- Products ---
+
+// 当前选中的产品ID
+let selectedProductId = null;
 
 function renderProducts() {
   const query = ($("#productSearch")?.value || "").trim().toLowerCase();
@@ -275,56 +369,181 @@ function renderProducts() {
     return !query || text.includes(query);
   });
 
-  const cardHtml = (product) => {
-    const qCount = state.geo_questions.filter(q => q.product_id === product.id).length;
-    const aCount = state.articles.filter(a => a.product_id === product.id).length;
-    const cov = (state.coverage?.by_product || []).find(p => p.product_id === product.id);
-    const covered = cov?.covered_q || 0;
-    const total = cov?.total_q || 0;
-    const coveragePct = total ? Math.round((covered / total) * 100) : 0;
+  // 渲染左侧产品列表
+  const listItemHtml = (product) => {
     const initial = (product.name || "?").trim().charAt(0).toUpperCase();
     const statusLabel = product.status === "active" ? "运营中" : (product.status === "draft" ? "草稿" : (product.status === "paused" ? "暂停" : "归档"));
-    const statusTone = product.status === "active" ? "on" : "off";
+    const isActive = selectedProductId === product.id;
     return `
-    <article class="product-grid-card" data-id="${product.id}">
-      <div class="product-grid-head">
-        <div class="product-grid-avatar">${escapeHtml(initial)}</div>
-        <div class="product-grid-title">
-          <h3>${escapeHtml(product.name)}</h3>
-          <span class="product-grid-status ${statusTone}">● ${statusLabel}</span>
-        </div>
+    <div class="product-list-item ${isActive ? "active" : ""}" data-id="${product.id}">
+      <div class="product-list-avatar">${escapeHtml(initial)}</div>
+      <div class="product-list-info">
+        <div class="product-list-name">${escapeHtml(product.name)}</div>
+        <div class="product-list-meta">${escapeHtml(product.type || "未分类")} · ${statusLabel}</div>
       </div>
-      ${product.selling_points ? `<p class="product-grid-desc">${escapeHtml(product.selling_points.slice(0, 120))}${product.selling_points.length > 120 ? "…" : ""}</p>` : ""}
-      <div class="product-grid-meta">
-        ${product.type ? `<div class="pg-meta-item"><span class="meta-label">类型</span><span class="meta-value ${getColumnColorClass("type", product.type)}">${escapeHtml(product.type)}</span></div>` : ""}
-        ${product.tone ? `<div class="pg-meta-item"><span class="meta-label">语气</span><span class="meta-value ${getColumnColorClass("tone", product.tone)}">${escapeHtml(product.tone)}</span></div>` : ""}
-      </div>
-      <div class="product-grid-stats">
-        <div class="pg-stat"><span class="pg-stat-num">${qCount}</span><span class="pg-stat-label">GEO 问题</span></div>
-        <div class="pg-stat"><span class="pg-stat-num">${aCount}</span><span class="pg-stat-label">内容</span></div>
-        <div class="pg-stat"><span class="pg-stat-num">${coveragePct}%</span><span class="pg-stat-label">覆盖率</span></div>
-      </div>
-      <div class="product-grid-actions">
-        <button class="btn ghost sm open-product-detail" data-id="${product.id}">详情</button>
-        <button class="btn ghost sm open-product-geo" data-id="${product.id}">GEO 问题${qCount ? ` (${qCount})` : ""}</button>
-        <button class="btn ghost sm edit-product" data-id="${product.id}">编辑</button>
-        <button class="btn ghost sm use-product" data-id="${product.id}">生成内容</button>
-        <button class="btn ghost sm danger delete-product" data-id="${product.id}">删除</button>
-      </div>
-    </article>`;
+    </div>`;
   };
 
-  const html = !list.length
+  const listHtml = !list.length
     ? (state.products.length
       ? `<div class="search-empty">没有找到匹配的产品</div>`
-      : emptyStateWithAction("还没有产品档案", "📦", `<button class="ghost" data-action="switch-product-add">去新增产品</button>`))
-    : list.map(cardHtml).join("");
+      : `<div class="empty-state"><p class="empty-state-title">还没有产品档案</p></div>`)
+    : list.map(listItemHtml).join("");
 
-  const grid = $("#productGrid");
-  if (grid) grid.innerHTML = html;
-  // 更新 Tab 角标
+  const listEl = $("#productList");
+  if (listEl) listEl.innerHTML = listHtml;
+
+  // 更新计数
   const cnt = $("#productListCount");
-  if (cnt) cnt.textContent = String(state.products.length);
+  if (cnt) cnt.textContent = `${state.products.length} 个产品`;
+
+  // 绑定点击事件
+  if (listEl) {
+    listEl.querySelectorAll(".product-list-item").forEach(el => {
+      el.addEventListener("click", () => {
+        selectProduct(el.dataset.id);
+      });
+    });
+  }
+}
+
+function renderProductDetail(product) {
+  if (!product) return;
+
+  // 更新标题
+  const nameEl = $("#productDetailName");
+  if (nameEl) nameEl.textContent = product.name || "未命名产品";
+
+  // 更新状态标签
+  const statusEl = $("#productDetailStatus");
+  if (statusEl) {
+    const statusLabel = product.status === "active" ? "运营中" : (product.status === "draft" ? "草稿" : (product.status === "paused" ? "暂停" : "归档"));
+    statusEl.textContent = statusLabel;
+    statusEl.className = `product-status ${product.status || "active"}`;
+  }
+
+  // 更新查看模式的字段
+  const setViewText = (id, value) => {
+    const el = $(`#${id}`);
+    if (el) el.textContent = value || "-";
+  };
+  setViewText("productViewType", product.type);
+  setViewText("productViewUrl", product.url);
+  setViewText("productViewAudience", product.audience);
+  setViewText("productViewSellingPoints", product.selling_points);
+  setViewText("productViewCompetitors", product.competitors);
+  setViewText("productViewTone", product.tone);
+  setViewText("productViewGoal", product.goal);
+  setViewText("productViewForbiddenWords", product.forbidden_words);
+
+  // 更新统计
+  const qCount = state.geo_questions.filter(q => String(q.product_id) === String(product.id)).length;
+  const aCount = state.articles.filter(a => String(a.product_id) === String(product.id)).length;
+  const cov = (state.coverage?.by_product || []).find(p => String(p.product_id) === String(product.id));
+  const covered = cov?.covered_q || 0;
+  const total = cov?.total_q || 0;
+  const coveragePct = total ? Math.round((covered / total) * 100) : 0;
+
+  const setStat = (id, value) => {
+    const el = $(`#${id}`);
+    if (el) el.textContent = value;
+  };
+  setStat("productStatQuestions", qCount);
+  setStat("productStatArticles", aCount);
+  // 同步 GEO Tab 角标
+  setStat("productGeoCount", qCount);
+  setStat("productStatCoverage", `${coveragePct}%`);
+
+  // 显示详情面板，隐藏空状态
+  const emptyState = $("#productEmptyState");
+  const detailPanel = $("#productDetailPanel");
+  if (emptyState) emptyState.style.display = "none";
+  if (detailPanel) detailPanel.style.display = "flex";
+
+  // 默认显示查看模式
+  showProductViewMode();
+}
+
+function showProductViewMode() {
+  const viewMode = $("#productViewMode");
+  const editMode = $("#productEditMode");
+  if (viewMode) viewMode.style.display = "";
+  if (editMode) editMode.style.display = "none";
+}
+
+function showProductEditMode(product) {
+  if (!product) return;
+  // 隐藏空状态，显示详情面板
+  const emptyState = $("#productEmptyState");
+  const detailPanel = $("#productDetailPanel");
+  if (emptyState) emptyState.style.display = "none";
+  if (detailPanel) detailPanel.style.display = "flex";
+  // 切换到编辑模式
+  const viewMode = $("#productViewMode");
+  const editMode = $("#productEditMode");
+  if (viewMode) viewMode.style.display = "none";
+  if (editMode) editMode.style.display = "";
+  // 标题显示
+  const nameEl = $("#productDetailName");
+  if (nameEl) nameEl.textContent = product.id ? product.name || "未命名产品" : "新建产品";
+  const statusEl = $("#productDetailStatus");
+  if (statusEl) statusEl.style.display = product.id ? "" : "none";
+
+  // 填充表单
+  const form = $("#productForm");
+  if (form) {
+    form.elements.id.value = product.id || "";
+    form.elements.name.value = product.name || "";
+    form.elements.type.value = product.type || "";
+    form.elements.url.value = product.url || "";
+    form.elements.audience.value = product.audience || "";
+    form.elements.selling_points.value = product.selling_points || "";
+    form.elements.competitors.value = product.competitors || "";
+    form.elements.tone.value = product.tone || "";
+    form.elements.goal.value = product.goal || "";
+    form.elements.forbidden_words.value = product.forbidden_words || "";
+  }
+}
+
+function selectProduct(id) {
+  selectedProductId = id;
+  const product = state.products.find(item => item.id === id);
+  if (!product) return;
+
+  // 同步隐藏字段 #pdId，供 GEO 问题相关逻辑使用
+  const pdIdEl = $("#pdId");
+  if (pdIdEl) pdIdEl.value = id;
+
+  // 更新左侧列表的选中状态
+  document.querySelectorAll(".product-list-item").forEach(el => {
+    el.classList.toggle("active", el.dataset.id === id);
+  });
+
+  // 渲染右侧详情
+  renderProductDetail(product);
+  // 同步渲染 GEO 问题列表（扁平化已并入档案页）
+  renderGeoQuestions();
+  // 滚动列表项到可见区域
+  const activeItem = document.querySelector(`.product-list-item.active`);
+  if (activeItem) activeItem.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  // 路由同步
+  syncRoute("products", id);
+}
+
+// 扁平化后不再有 Tab 切换，保留空函数避免外部调用报错
+function showProductTab(_tabName) {
+  // no-op: GEO 问题已与档案同页
+}
+
+function resetProductForm() {
+  selectedProductId = null;
+  const emptyState = $("#productEmptyState");
+  const detailPanel = $("#productDetailPanel");
+  if (emptyState) emptyState.style.display = "";
+  if (detailPanel) detailPanel.style.display = "none";
+  // 清空表单
+  const form = $("#productForm");
+  if (form) form.reset();
 }
 
 function renderProductImages(productId) {
@@ -343,32 +562,6 @@ function renderProductImages(productId) {
   }
 }
 
-function selectProduct(id) {
-  const product = state.products.find(item => item.id === id);
-  if (!product) return;
-  const form = $("#productForm");
-  form.elements.id.value = product.id;
-  form.elements.name.value = product.name || "";
-  form.elements.type.value = product.type || "";
-  form.elements.url.value = product.url || "";
-  form.elements.audience.value = product.audience || "";
-  form.elements.selling_points.value = product.selling_points || "";
-  form.elements.competitors.value = product.competitors || "";
-  form.elements.tone.value = product.tone || "";
-  form.elements.goal.value = product.goal || "";
-  form.elements.forbidden_words.value = product.forbidden_words || "";
-  $("#productFormTitle").textContent = "编辑产品";
-  $("#saveProductBtn").textContent = "更新产品";
-  switchSubTab("product-add");
-}
-
-function resetProductForm() {
-  $("#productForm").reset();
-  $("#productId").value = "";
-  $("#productFormTitle").textContent = "新增产品";
-  $("#saveProductBtn").textContent = "保存产品";
-}
-
 function applyProductSuggestion(rawItem) {
   const item = normalizeProductSuggestion(rawItem);
   const form = $("#productForm");
@@ -377,17 +570,17 @@ function applyProductSuggestion(rawItem) {
       form.elements[key].value = value;
     }
   }
-  $("#productFormTitle").textContent = $("#productId").value ? "编辑产品" : "新增产品";
 }
 
 // --- GEO Questions ---
 
 function renderGeoQuestions() {
-  // 按当前产品详情页的产品过滤
-  const currentProductId = ($("#pdId")?.value) || "";
+  // 按当前选中产品过滤（GEO 问题已合并到产品详情的 GEO Tab）
+  const currentProductId = selectedProductId || ($("#pdId")?.value) || "";
   if (!currentProductId) {
     $("#geoQuestionList").innerHTML = "";
-    $("#pdGeoCount").textContent = "0";
+    const cntEl = $("#productGeoCount");
+    if (cntEl) cntEl.textContent = "0";
     return;
   }
 
@@ -404,7 +597,8 @@ function renderGeoQuestions() {
 
   // 更新 Tab 角标
   const totalCount = state.geo_questions.filter(q => String(q.product_id) === currentProductId).length;
-  $("#pdGeoCount").textContent = String(totalCount);
+  const cntEl = $("#productGeoCount");
+  if (cntEl) cntEl.textContent = String(totalCount);
 
   $("#geoQuestionList").innerHTML = list.map(item => {
     const cov = (state.coverage?.by_question || []).find(c => c.geo_question_id === item.id);
@@ -415,26 +609,32 @@ function renderGeoQuestions() {
       : `<span class="tag uncovered">未覆盖</span>`;
     const metaParts = [escapeHtml(item.intent), escapeHtml(item.audience)].filter(Boolean);
     return `
-    <article class="card geo-question-card ${item.status}">
-      <div class="panel-heading">
-        <h3>${escapeHtml(item.question)}</h3>
+    <article class="card geo-question-card ${item.status}" data-id="${item.id}">
+      <div class="geo-card-header">
+        <h3 class="geo-card-question">${escapeHtml(item.question)}</h3>
         <span class="status ${escapeHtml(item.priority)}">${escapeHtml(item.priority)}</span>
       </div>
-      ${metaParts.length ? `<p class="muted">${metaParts.join(" · ")}</p>` : ""}
-      ${item.content_angle ? `<p>${escapeHtml(item.content_angle)}</p>` : ""}
+      ${metaParts.length ? `<p class="muted small geo-card-meta">${metaParts.join(" · ")}</p>` : ""}
+      ${item.content_angle ? `<p class="geo-card-angle">${escapeHtml(item.content_angle)}</p>` : ""}
       <div class="tagline">
         <span class="tag">${escapeHtml(item.status)}</span>
         ${item.target_platform ? `<span class="tag">${escapeHtml(item.target_platform)}</span>` : ""}
         ${coverTag}
       </div>
-      <div class="button-row mini-actions">
-        <button class="ghost edit-geo-question" data-id="${item.id}">编辑</button>
-        <button class="ghost cover-geo-question" data-id="${item.id}">标记为已覆盖</button>
-        <button class="ghost delete-geo-question" data-id="${item.id}">删除</button>
+      <div class="button-row mini-actions" onclick="event.stopPropagation()">
+        <button class="ghost sm edit-geo-question" data-id="${item.id}">编辑</button>
+        <button class="ghost sm ai-geo-question" data-id="${item.id}" title="AI 优化问题与内容角度">✨ AI 优化</button>
+        <button class="ghost sm cover-geo-question" data-id="${item.id}">标记已覆盖</button>
+        <button class="ghost sm danger delete-geo-question" data-id="${item.id}">删除</button>
       </div>
     </article>
   `;
   }).join("") || (totalCount ? `<div class="search-empty">没有找到匹配的问题</div>` : emptyStateWithAction("还没有 GEO 问题", "Q", `<button class="ghost" data-action="toggle-geo-form">新增第一个问题</button>`));
+
+  // 卡片整体点击 = 编辑
+  $$(".geo-question-card").forEach(card => {
+    card.addEventListener("click", () => selectGeoQuestion(card.dataset.id));
+  });
 }
 
 function selectGeoQuestion(id) {
@@ -455,7 +655,7 @@ function selectGeoQuestion(id) {
 }
 
 function resetGeoQuestionForm() {
-  const currentProductId = $("#pdId")?.value || "";
+  const currentProductId = selectedProductId || ($("#pdId")?.value) || "";
   $("#geoQuestionForm").reset();
   $("#geoQuestionId").value = "";
   $("#geoProduct").value = currentProductId; // 保持当前产品
@@ -539,13 +739,13 @@ function renderAiSettings() {
     $("#aiPreset").value = curVal;
   }
   $("#aiMode").value = ai.mode || "manual";
-  $("#textBaseUrl").value = ai.text_base_url || ai.base_url || "https://open.bigmodel.cn/api/paas/v4";
-  $("#textModel").value = ai.text_model || ai.model || "glm-4-flash";
-  $("#imageBaseUrl").value = ai.image_base_url || "https://open.bigmodel.cn/api/paas/v4";
-  $("#imageModel").value = ai.image_model || "cogview-3-flash";
+  $("#textBaseUrl").value = ai.text_base_url || ai.base_url || DEFAULT_AI_SETTINGS.text_base_url;
+  $("#textModel").value = ai.text_model || ai.model || DEFAULT_AI_SETTINGS.text_model;
+  $("#imageBaseUrl").value = ai.image_base_url || DEFAULT_AI_SETTINGS.image_base_url;
+  $("#imageModel").value = ai.image_model || DEFAULT_AI_SETTINGS.image_model;
   $("#aiTemperature").value = ai.temperature || 0.7;
-  $("#textKeyStatus").textContent = ai.has_text_api_key ? "已保存文本模型 Key，留空不会覆盖" : "未保存文本模型 Key";
-  $("#imageKeyStatus").textContent = ai.has_image_api_key ? "已保存图片模型 Key，留空不会覆盖" : "未保存图片模型 Key";
+  $("#textKeyStatus").textContent = ai.has_text_api_key ? "✓ 文本模型 Key 已保存" : "未保存 Key";
+  $("#imageKeyStatus").textContent = ai.has_image_api_key ? "✓ 图片模型 Key 已保存" : "未保存 Key";
 
   // 更新顶栏模型标签
   updateCurrentModelLabel();
@@ -680,7 +880,7 @@ function renderArticles() {
     <label><input type="checkbox" value="${article.id}">${escapeHtml(article.title)}</label>
   `).join("");
 
-  // 更新「已生成」Tab 角标
+  // 更新内容列表计数
   const tabCount = $("#workshopGeneratedCount");
   if (tabCount) tabCount.textContent = String(state.articles.length);
 }
@@ -712,8 +912,8 @@ function selectArticle(id) {
   $("#articleStatus").value = article.status || "draft";
   renderArticles();
   renderPreview();
-  // 切到「已生成」Tab 让用户编辑
-  switchWorkshopTab("generated");
+  // 路由同步
+  syncRoute("workshop", id);
 }
 
 function updateWordCount() {
@@ -740,6 +940,8 @@ function renderPreview() {
 
 // --- Platforms ---
 
+// 当前选中的平台ID（与 state.selectedPlatformId 保持同步，本地用于渲染高亮）
+
 function renderPlatforms() {
   const query = ($("#platformSearch")?.value || "").trim().toLowerCase();
   const list = state.platforms.filter(p => {
@@ -747,91 +949,154 @@ function renderPlatforms() {
     return !query || text.includes(query);
   });
 
-  // 按 category 分组
-  const groups = {};
-  list.forEach(p => {
-    const cat = p.category || "其他";
-    if (!groups[cat]) groups[cat] = [];
-    groups[cat].push(p);
-  });
-
-  const cardHtml = (platform) => {
-    const isEnabled = platform.status === "enabled";
-    const statusLabel = isEnabled ? "启用" : "观察";
-    // 首字母作为 avatar（中文取首字，英文取首字母大写）
+  // 左侧列表项
+  const listItemHtml = (platform) => {
     const initial = (platform.name || "?").trim().charAt(0).toUpperCase();
-    // 外链 / 软文适配度映射为可读标签
-    const linkMap = { allowed: "✓ 可外链", limited: "⚠ 限外链", forbidden: "✕ 禁外链" };
-    const fitMap = { high: "高适配", medium: "中适配", low: "低适配" };
-    const linkLabel = linkMap[platform.allows_external_links] || "— 外链";
-    const fitLabel = fitMap[platform.soft_article_fit] || "— 适配";
-    const fitTone = platform.soft_article_fit === "high" ? "good" : (platform.soft_article_fit === "low" ? "warn" : "");
+    const isEnabled = platform.status === "enabled";
+    const statusLabel = isEnabled ? "启用" : (platform.status === "watch" ? "观察" : "暂停");
+    const isActive = state.selectedPlatformId === platform.id;
     return `
-    <article class="platform-card ${isEnabled ? "enabled" : "watch"} ${platform.id === state.selectedPlatformId ? "active" : ""}" data-id="${platform.id}">
-      <div class="platform-card-head">
-        <div class="platform-avatar" aria-hidden="true">${escapeHtml(initial)}</div>
-        <div class="platform-card-title">
-          <h3>${escapeHtml(platform.name)}</h3>
-          <span class="platform-status-dot ${isEnabled ? "on" : "off"}"></span>
-          <span class="platform-status-text">${statusLabel}</span>
-        </div>
+    <div class="platform-list-item ${isActive ? "active" : ""}" data-id="${platform.id}">
+      <div class="platform-list-avatar ${isEnabled ? "" : "off"}">${escapeHtml(initial)}</div>
+      <div class="platform-list-info">
+        <div class="platform-list-name">${escapeHtml(platform.name)}</div>
+        <div class="platform-list-meta">${escapeHtml(platform.category || "未分类")} · ${statusLabel}</div>
       </div>
-      ${platform.content_style ? `<p class="platform-desc">${escapeHtml(platform.content_style)}</p>` : ""}
-      <div class="platform-meta">
-        ${platform.recommended_words ? `<div class="platform-meta-item"><span class="meta-label">字数</span><span class="meta-value">${escapeHtml(platform.recommended_words)}</span></div>` : ""}
-        ${platform.frequency ? `<div class="platform-meta-item"><span class="meta-label">频次</span><span class="meta-value">${escapeHtml(platform.frequency)}</span></div>` : ""}
-      </div>
-      <div class="platform-chips">
-        <span class="chip ${fitTone}">${fitLabel}</span>
-        <span class="chip">${linkLabel}</span>
-        ${platform.account_name ? `<span class="chip muted">@${escapeHtml(platform.account_name)}</span>` : ""}
-      </div>
-      <div class="platform-actions">
-        <button class="btn ghost sm open-platform" data-url="${escapeHtml(platform.url || "")}" title="跳转到平台">打开 ↗</button>
-        <button class="btn ghost sm edit-platform" data-id="${platform.id}">编辑</button>
-        <button class="btn ghost sm toggle-platform" data-id="${platform.id}" data-status="${isEnabled ? "watch" : "enabled"}">${isEnabled ? "观察" : "启用"}</button>
-        <button class="btn ghost sm danger delete-platform" data-id="${platform.id}">删除</button>
-      </div>
-    </article>`;
+    </div>`;
   };
 
-  // 分类图标映射
-  const categoryIcons = {
-    "综合资讯": "📰", "社区社交": "💬", "视频平台": "▶",
-    "技术社区": "⚙", "海外平台": "🌍", "其他": "📁",
-  };
-
-  if (!list.length) {
-    $("#platformGrid").innerHTML = state.platforms.length
+  const listHtml = !list.length
+    ? (state.platforms.length
       ? `<div class="search-empty">没有找到匹配的平台</div>`
-      : emptyStateWithAction("还没有平台", "🔍", `<button class="ghost" data-action="switch-platform-add">去新增平台</button>`);
-  } else {
-    $("#platformGrid").innerHTML = Object.entries(groups).map(([cat, items]) => `
-      <div class="platform-category-group">
-        <span class="cat-icon" aria-hidden="true">${categoryIcons[cat] || "📁"}</span>
-        <h3>${escapeHtml(cat)}</h3>
-        <span class="count">${items.length}</span>
-        <span class="cat-line"></span>
-      </div>
-      ${items.map(cardHtml).join("")}
-    `).join("");
+      : `<div class="empty-state"><p class="empty-state-title">还没有平台档案</p></div>`)
+    : list.map(listItemHtml).join("");
+
+  const listEl = $("#platformList");
+  if (listEl) listEl.innerHTML = listHtml;
+
+  // 更新计数
+  const cnt = $("#platformListCount");
+  if (cnt) cnt.textContent = `${state.platforms.length} 个平台`;
+
+  // 绑定点击事件
+  if (listEl) {
+    listEl.querySelectorAll(".platform-list-item").forEach(el => {
+      el.addEventListener("click", () => {
+        selectPlatform(el.dataset.id);
+      });
+    });
   }
 
+  // 同步发布任务页面的平台选择器
   const enabled = state.platforms.filter(p => p.status === "enabled");
   $("#taskPlatformPicker").innerHTML = enabled.map(platform => `
     <label><input type="checkbox" value="${platform.id}">${escapeHtml(platform.name)}${platform.account_name ? ` / ${escapeHtml(platform.account_name)}` : ""}</label>
   `).join("");
-
-  // 更新 Tab 角标
-  const cnt = $("#platformListCount");
-  if (cnt) cnt.textContent = String(state.platforms.length);
 }
 
-function selectPlatform(id) {
-  const platform = state.platforms.find(item => item.id === id);
+// 渲染右侧平台详情
+function renderPlatformDetail(platform) {
   if (!platform) return;
-  state.selectedPlatformId = id;
-  $("#platformId").value = platform.id;
+
+  // 标题
+  const nameEl = $("#platformDetailName");
+  if (nameEl) nameEl.textContent = platform.name || "未命名平台";
+
+  // 状态标签
+  const statusEl = $("#platformDetailStatus");
+  if (statusEl) {
+    const statusMap = { enabled: "启用", watch: "观察", paused: "暂停" };
+    statusEl.textContent = statusMap[platform.status] || "启用";
+    statusEl.className = `platform-status ${platform.status || "enabled"}`;
+  }
+
+  // 切换按钮文案
+  const toggleBtn = $("#platformDetailToggle");
+  if (toggleBtn) {
+    toggleBtn.textContent = platform.status === "enabled" ? "观察" : "启用";
+    toggleBtn.dataset.id = platform.id;
+    toggleBtn.dataset.status = platform.status === "enabled" ? "watch" : "enabled";
+  }
+
+  // 打开按钮
+  const openBtn = $("#platformDetailOpen");
+  if (openBtn) {
+    openBtn.dataset.url = platform.url || "";
+  }
+
+  // 删除按钮
+  const delBtn = $("#platformDetailDelete");
+  if (delBtn) delBtn.dataset.id = platform.id;
+
+  // 查看模式字段
+  const linkMap = { allowed: "可外链", limited: "限外链", forbidden: "禁外链" };
+  const fitMap = { high: "高适配", medium: "中适配", low: "低适配" };
+  const setViewText = (id, value) => {
+    const el = $(`#${id}`);
+    if (el) el.textContent = value || "-";
+  };
+  setViewText("platformViewCategory", platform.category);
+  setViewText("platformViewUrl", platform.url);
+  setViewText("platformViewAccountName", platform.account_name);
+  setViewText("platformViewContentStyle", platform.content_style);
+  setViewText("platformViewWords", platform.recommended_words);
+  setViewText("platformViewFrequency", platform.frequency);
+  setViewText("platformViewTitleStyle", platform.title_style);
+  setViewText("platformViewTagsRule", platform.tags_rule);
+  setViewText("platformViewLinks", linkMap[platform.allows_external_links]);
+  setViewText("platformViewFit", fitMap[platform.soft_article_fit]);
+  setViewText("platformViewLoginNotes", platform.login_notes);
+  setViewText("platformViewNotes", platform.notes);
+
+  // 统计
+  const tasks = state.tasks.filter(t => String(t.platform_id) === String(platform.id));
+  const published = tasks.filter(t => t.status === "published").length;
+  const todo = tasks.filter(t => t.status === "todo").length;
+  const setStat = (id, value) => {
+    const el = $(`#${id}`);
+    if (el) el.textContent = value;
+  };
+  setStat("platformStatTasks", tasks.length);
+  setStat("platformStatPublished", published);
+  setStat("platformStatTodo", todo);
+
+  // 显示详情面板，隐藏空状态
+  const emptyState = $("#platformEmptyState");
+  const detailPanel = $("#platformDetailPanel");
+  if (emptyState) emptyState.style.display = "none";
+  if (detailPanel) detailPanel.style.display = "flex";
+
+  // 默认显示查看模式
+  showPlatformViewMode();
+}
+
+function showPlatformViewMode() {
+  const viewMode = $("#platformViewMode");
+  const editMode = $("#platformEditMode");
+  if (viewMode) viewMode.style.display = "";
+  if (editMode) editMode.style.display = "none";
+}
+
+function showPlatformEditMode(platform) {
+  if (!platform) return;
+  // 隐藏空状态，显示详情面板
+  const emptyState = $("#platformEmptyState");
+  const detailPanel = $("#platformDetailPanel");
+  if (emptyState) emptyState.style.display = "none";
+  if (detailPanel) detailPanel.style.display = "flex";
+  // 切换到编辑模式
+  const viewMode = $("#platformViewMode");
+  const editMode = $("#platformEditMode");
+  if (viewMode) viewMode.style.display = "none";
+  if (editMode) editMode.style.display = "";
+  // 标题显示
+  const nameEl = $("#platformDetailName");
+  if (nameEl) nameEl.textContent = platform.id ? platform.name || "未命名平台" : "新建平台";
+  const statusEl = $("#platformDetailStatus");
+  if (statusEl) statusEl.style.display = platform.id ? "" : "none";
+
+  // 填充表单
+  $("#platformId").value = platform.id || "";
   $("#platformName").value = platform.name || "";
   $("#platformCategory").value = platform.category || "";
   $("#platformUrl").value = platform.url || "";
@@ -846,20 +1111,38 @@ function selectPlatform(id) {
   $("#platformFit").value = platform.soft_article_fit || "medium";
   $("#platformStatus").value = platform.status || "enabled";
   $("#platformNotes").value = platform.notes || "";
-  $("#platformFormTitle").textContent = "编辑平台";
-  switchSubTab("platform-add");
-  renderPlatforms();
+}
+
+function selectPlatform(id) {
+  state.selectedPlatformId = id;
+  const platform = state.platforms.find(item => item.id === id);
+  if (!platform) return;
+  // 更新左侧列表的选中状态
+  document.querySelectorAll(".platform-list-item").forEach(el => {
+    el.classList.toggle("active", el.dataset.id === id);
+  });
+  // 渲染右侧详情
+  renderPlatformDetail(platform);
+  // 滚动列表项到可见区域
+  const activeItem = document.querySelector(`.platform-list-item.active`);
+  if (activeItem) activeItem.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  // 路由同步
+  syncRoute("platforms", id);
 }
 
 function resetPlatformForm() {
   state.selectedPlatformId = null;
-  $("#platformForm").reset();
+  const emptyState = $("#platformEmptyState");
+  const detailPanel = $("#platformDetailPanel");
+  if (emptyState) emptyState.style.display = "";
+  if (detailPanel) detailPanel.style.display = "none";
+  // 清空表单
+  const form = $("#platformForm");
+  if (form) form.reset();
   $("#platformId").value = "";
-  $("#platformFormTitle").textContent = "新增平台";
-  $("#platformLinks").value = "allowed";
+  $("#platformLinks").value = "limited";
   $("#platformFit").value = "medium";
   $("#platformStatus").value = "enabled";
-  renderPlatforms();
 }
 
 // --- Tasks ---
@@ -1089,11 +1372,20 @@ function renderTaskCalendar() {
 function taskRow(task) {
   const metaParts = [escapeHtml(task.platform_name), escapeHtml(task.platform_category), task.platform_account_name ? `账号：${escapeHtml(task.platform_account_name)}` : ""].filter(Boolean);
   const isPublished = task.status === "published" && task.published_url;
+  // 发布最佳时间建议（仅待发布状态显示）
+  let bestTimeHint = "";
+  if (task.status === "todo" && task.platform_name) {
+    const bestTime = typeof getPlatformBestPublishTime === "function" ? getPlatformBestPublishTime(task.platform_name) : null;
+    if (bestTime) {
+      bestTimeHint = `<p class="hint compact-hint best-time">⏰ 最佳发布：${escapeHtml(bestTime.weekday)} ${escapeHtml(bestTime.time)} · ${escapeHtml(bestTime.note)}</p>`;
+    }
+  }
   return `
     <article class="task-row ${isPublished ? 'published' : ''}">
       <h3>${escapeHtml(task.article_title)}</h3>
       ${metaParts.length ? `<p class="muted">${metaParts.join(" · ")}</p>` : ""}
       ${task.platform_login_notes ? `<p class="hint compact-hint">${escapeHtml(task.platform_login_notes)}</p>` : ""}
+      ${bestTimeHint}
       ${task.article_risk_notes ? `<p class="muted">风险：${escapeHtml(task.article_risk_notes)}</p>` : ""}
       <div class="task-compact">
         <input id="publishedUrl-${task.id}" placeholder="粘贴已发布链接，然后点「已发布」" value="${escapeHtml(task.published_url || "")}" />

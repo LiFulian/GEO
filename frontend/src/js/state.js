@@ -13,7 +13,6 @@ const state = {
   selectedProductId: null,
   selectedArticleId: null,
   selectedPlatformId: null,
-  taskView: "matrix",
   taskCalendarDate: new Date(),
 };
 
@@ -25,6 +24,20 @@ const aiPresets = [
   { name: "通义千问兼容", text_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", text_model: "qwen-plus", image_base_url: "", image_model: "", provider: "阿里云" },
   { name: "本地 Ollama 网关", text_base_url: "http://127.0.0.1:11434/v1", text_model: "qwen2.5:7b", image_base_url: "", image_model: "", provider: "本地部署" },
 ];
+
+// 默认 AI 设置：使用智谱 GLM 预设
+// 若 .env 中配置了 VITE_DEFAULT_AI_KEY，则首次加载即启用 API 直连模式
+// 通过 window.__GEO_ENV__.VITE_DEFAULT_AI_KEY 注入（由 vite.config.js 的 transformIndexHtml 插件写入）
+const _envDefaultKey = (typeof window !== "undefined" && window.__GEO_ENV__ && window.__GEO_ENV__.VITE_DEFAULT_AI_KEY) || "";
+const DEFAULT_AI_SETTINGS = {
+  mode: _envDefaultKey ? "api" : "manual",
+  text_base_url: "https://open.bigmodel.cn/api/paas/v4",
+  text_model: "glm-4-flash",
+  image_base_url: "https://open.bigmodel.cn/api/paas/v4",
+  image_model: "cogview-3-flash",
+  temperature: 0.7,
+  preset_index: 0,
+};
 
 // 默认平台种子数据：新用户首次加载时自动播种
 const DEFAULT_PLATFORMS = [
@@ -58,19 +71,52 @@ async function load() {
   Object.assign(state, await api("/api/bootstrap"));
   // 首次加载若平台为空，自动播种默认平台
   if (state.platforms.length === 0 && isLoggedIn()) {
-    await seedDefaultPlatforms();
-    Object.assign(state, await api("/api/bootstrap"));
+    const seeded = await seedDefaultPlatforms();
+    if (seeded) {
+      // 直接更新state.platforms，避免再次调用apiBootstrap
+      state.platforms = seeded;
+    }
+  }
+  // 首次加载若无 AI 设置，自动创建默认配置（智谱 GLM 预设，待用户填 Key）
+  if (isLoggedIn() && (!state.ai_settings || !state.ai_settings.id)) {
+    await seedDefaultAiSettings();
+  }
+  // 清除搜索索引缓存
+  if (typeof clearSearchIndexCache === 'function') {
+    clearSearchIndexCache();
   }
   render();
+}
+
+// 首次加载时为用户创建默认 AI 设置
+// 若 .env 中配置了 VITE_DEFAULT_AI_KEY，则同时写入 key 并启用 API 直连
+async function seedDefaultAiSettings() {
+  try {
+    const payload = { ...DEFAULT_AI_SETTINGS };
+    if (_envDefaultKey) {
+      payload.text_api_key = _envDefaultKey;
+      payload.image_api_key = _envDefaultKey;
+      payload.mode = "api";
+    }
+    const created = await geoApi("/api/ai_settings", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (created) state.ai_settings = created;
+  } catch (e) {
+    console.warn("播种默认 AI 设置失败：", e.message);
+  }
 }
 
 // 为当前用户批量创建默认平台
 async function seedDefaultPlatforms() {
   try {
-    await Promise.all(DEFAULT_PLATFORMS.map(p =>
+    const createdPlatforms = await Promise.all(DEFAULT_PLATFORMS.map(p =>
       api("/api/platforms", { method: "POST", body: JSON.stringify(p) })
     ));
+    return createdPlatforms;
   } catch (e) {
     console.warn("播种默认平台失败：", e.message);
+    return null;
   }
 }

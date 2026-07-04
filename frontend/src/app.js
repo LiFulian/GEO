@@ -13,7 +13,10 @@ if (typeof initEnhancements === "function") {
 }
 
 if (isLoggedIn()) {
-  load().catch(err => toast(err.message, "error"));
+  load().then(() => {
+    // 数据加载完成后初始化路由（支持从 hash 恢复状态）
+    if (typeof initRouter === "function") initRouter();
+  }).catch(err => toast(err.message, "error"));
 } else {
   showAuthView();
   render();

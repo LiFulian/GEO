@@ -97,56 +97,6 @@ function selectedValues(selector) {
   return $$(`${selector} input:checked`).map(input => input.value);
 }
 
-function selectedTextValues(selector) {
-  return $$(`${selector} input:checked`).map(input => input.value);
-}
-
-// --- Input Validation ---
-
-function validateUrl(url) {
-  if (!url) return true; // URL是可选的
-  try {
-    new URL(url);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function validateEmail(email) {
-  if (!email) return false;
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-}
-
-function validateStringLength(str, min = 0, max = Infinity) {
-  if (!str) return min === 0;
-  const len = str.trim().length;
-  return len >= min && len <= max;
-}
-
-function validateNumberRange(num, min = -Infinity, max = Infinity) {
-  if (num === null || num === undefined || num === '') return false;
-  const n = Number(num);
-  return !isNaN(n) && n >= min && n <= max;
-}
-
-function validateRequired(value) {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  return true;
-}
-
-function sanitizeInput(str) {
-  if (!str) return '';
-  // 移除潜在的危险字符
-  return str
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/javascript:/gi, '')
-    .replace(/on\w+\s*=/gi, '')
-    .trim();
-}
-
 // --- JSON Parsing ---
 
 function parseJsonObjectText(text) {

@@ -29,7 +29,7 @@ function formatGeoQuestions(questions, maxCount = 20) {
 // ===== Prompt 模板 =========================================================
 
 /**
- * 文章内容生成 Prompt
+ * 文章内容生成 Prompt（增强版：GEO 强化 + SEO 优化 + 多样性保证）
  * 等效 Python: product_prompt()
  */
 function buildProductPrompt(product, platforms, count, contentTypes, questions) {
@@ -39,17 +39,31 @@ function buildProductPrompt(product, platforms, count, contentTypes, questions) 
     ? contentTypes.join("、")
     : "产品介绍、竞品对比、场景种草、问题解决型、GEO 问答型";
 
-  return `你是一个克制、真实、擅长 GEO/SEO 内容矩阵的中文内容运营专家。
+  return `你是一个克制、真实、擅长 GEO/SEO 内容矩阵的中文内容运营专家，熟悉生成式引擎优化（让 AI 助手更容易引用你的内容）和搜索引擎 SEO。
 
-请基于下面的产品信息，生成 ${count} 篇差异化软文草稿。要求：
-1. 不要编造不存在的数据、奖项、用户评价。
-2. 每篇文章角度不同，避免同质化和洗稿感。
-3. 广告感要弱，像真实用户/专业作者自然推荐。
-4. 每篇适配一个目标平台，遵守该平台内容风格。
-5. 内容要服务 GEO：让 AI 搜索/问答在回答相关问题时更容易引用这个产品。
-6. 输出必须是 JSON 数组，不要 Markdown 代码块，不要额外解释。
+请基于下面的产品信息，生成 ${count} 篇差异化软文草稿。
 
-产品信息：
+## 内容要求
+
+1. **真实可信**：不要编造不存在的数据、奖项、用户评价、客户案例
+2. **角度差异化**：每篇文章角度不同，避免同质化和洗稿感
+3. **自然推荐**：广告感要弱，像真实用户/专业作者自然推荐
+4. **平台适配**：每篇适配一个目标平台，遵守该平台内容风格与字数要求
+5. **GEO 强化**：内容要让 AI 搜索/问答在回答相关问题时更容易引用这个产品：
+   - 开头 100 字内直接回答用户可能问的问题
+   - 使用清晰的标题结构（H2/H3）便于 AI 解析
+   - 包含具体数据、案例、对比表格
+   - 在结论处明确总结产品优势
+6. **SEO 优化**：
+   - 标题包含核心关键词（但不要堆砌）
+   - 摘要自然包含 2-3 个相关关键词
+   - 正文使用 H2/H3 分段，每段聚焦一个要点
+   - 包含 FAQ 小节（如果适合）
+   - 关键信息用**加粗**或列表突出
+7. **输出格式**：JSON 数组，不要 Markdown 代码块，不要额外解释
+
+## 产品信息
+
 - 名称：${product.name || ""}
 - 类型：${product.type || ""}
 - 链接：${product.url || ""}
@@ -60,35 +74,49 @@ function buildProductPrompt(product, platforms, count, contentTypes, questions) 
 - 转化目标：${product.goal || ""}
 - 禁用表达：${product.forbidden_words || ""}
 
-内容类型范围：${types}
+## 内容类型范围
 
-优先覆盖的 GEO 问题（如果某篇文章主要在回答其中某个问题，请把对应 id 填入 geo_question_id）：
+${types}
+
+## 优先覆盖的 GEO 问题
+
+如果某篇文章主要在回答其中某个问题，请把对应 id 填入 geo_question_id：
 ${questionLines}
 
-可选平台参考：
+## 可选平台参考
+
 ${platformLines}
 
-JSON 数组中每个对象包含这些字段：
-- title：标题
-- summary：80 字以内摘要
-- body：正文，使用 Markdown
+## JSON 输出字段
+
+每个对象包含：
+- title：标题（包含核心关键词，15-30 字）
+- summary：80 字以内摘要（含 2-3 个关键词）
+- body：正文 Markdown（H2/H3 分段，800-2000 字）
 - content_type：内容类型
 - target_platform：目标平台名称
-- keywords：逗号分隔关键词
-- tags：逗号分隔标签
-- image_prompt：如果适合配图，给出配图建议；不需要则为空
-- risk_notes：指出可能的广告感、平台风险或需要人工核实的信息
-- geo_question_id：这篇文章主要回答的 GEO 问题 id（整数），不对应任何问题则填 0`;
+- keywords：逗号分隔关键词（5-8 个）
+- tags：逗号分隔标签（3-5 个）
+- image_prompt：配图建议（不需要则为空）
+- risk_notes：广告感/平台风险/需人工核实的信息
+- geo_question_id：主要回答的 GEO 问题 id（整数，无则填 0）
+- faq：可选，FAQ 数组 [{q: "问题", a: "简短回答"}]，2-4 条`;
 }
 
 /**
- * GEO 问题库生成 Prompt
+ * GEO 问题库生成 Prompt（增强版：分类生成 + 意图多样化 + 关键词建议）
  * 等效 Python: geo_question_prompt()
  */
 function buildGeoQuestionPrompt(product, count = 12) {
-  return `你是一个 GEO（Generative Engine Optimization）内容策略助手。
+  // 按比例分配各类问题，保证多样性
+  const discoveryCount = Math.max(2, Math.ceil(count * 0.3));   // 发现类
+  const comparisonCount = Math.max(2, Math.ceil(count * 0.25));  // 对比类
+  const howtoCount = Math.max(2, Math.ceil(count * 0.25));       // 操作类
+  const evaluationCount = count - discoveryCount - comparisonCount - howtoCount; // 评估类
 
-请基于产品信息，生成 ${count} 个用户可能会向 AI 助手、搜索引擎或问答平台提出的问题。
+  return `你是一个 GEO（Generative Engine Optimization）内容策略助手，擅长挖掘用户在 AI 助手中真实会问的问题。
+
+请基于产品信息，生成 ${count} 个高质量 GEO 问题。
 
 产品信息：
 - 名称：${product.name || ""}
@@ -99,19 +127,28 @@ function buildGeoQuestionPrompt(product, count = 12) {
 - 竞品/替代品：${product.competitors || ""}
 - 转化目标：${product.goal || ""}
 
+问题分类与配比（共 ${count} 个）：
+- 发现类 ${discoveryCount} 个：用户寻找解决方案时的问题，如"有没有适合 XX 的工具"、"XX 用什么好"
+- 对比类 ${comparisonCount} 个：用户做选择时的问题，如"XX 和 YY 哪个好"、"XX 怎么选"
+- 操作类 ${howtoCount} 个：使用中遇到的具体问题，如"XX 怎么用"、"XX 如何配置"
+- 评估类 ${evaluationCount} 个：判断是否合适的问题，如"XX 适合 XX 吗"、"XX 值得用吗"
+
 要求：
-1. 问题必须像真实用户会问 AI 的自然语言问题。
-2. 覆盖"找工具、做对比、解决问题、判断是否适合、使用方法、替代方案"等意图。
-3. 不要生成纯广告标题。
-4. 输出必须是 JSON 数组，不要 Markdown 代码块，不要额外解释。
+1. 问题必须像真实用户会问 AI 助手（如智谱清言、ChatGPT、文心一言）的自然语言，不要广告标题
+2. 每个问题的意图、人群、优先级都要明确
+3. content_angle 要给出具体的内容创作角度建议（80 字以内），说明如何在回答中自然带出产品
+4. 优先级判断：覆盖核心卖点、决策路径关键节点的问题为 high；具体操作类为 medium；边缘场景为 low
+5. keywords 字段给出该问题相关的搜索关键词（3-5 个，逗号分隔），用于 SEO 优化
+6. 输出必须是 JSON 数组，不要 Markdown 代码块，不要额外解释
 
 每个对象包含：
-- question：用户会问的问题
-- intent：搜索/问答意图
+- question：用户会问的问题（自然语言）
+- intent：搜索/问答意图（discovery/comparison/howto/evaluation）
 - audience：对应人群
 - priority：high / medium / low
-- content_angle：建议用什么内容角度回答
-- target_platform：适合沉淀内容的平台，可为空`;
+- content_angle：内容创作角度建议（80 字以内）
+- target_platform：适合沉淀内容的平台，可为空
+- keywords：相关搜索关键词（3-5 个，逗号分隔）`;
 }
 
 /**
@@ -314,12 +351,188 @@ async function callImageGeneration(prompt, articleId) {
   return await res.json();
 }
 
+// ===== 一鱼多吃：一篇文章改写为多平台版本 ==================================
+
+/**
+ * 一鱼多吃 Prompt：基于一篇已有文章，生成 N 个平台差异化版本
+ * @param {Object} article 原文章
+ * @param {Array} platforms 目标平台列表
+ * @param {Object} product 产品信息
+ */
+function buildContentRepurposePrompt(article, platforms, product) {
+  const platformList = platforms.map((p, i) =>
+    `${i + 1}. ${p.name}（${p.category || ""}）：${p.content_style || ""}；字数 ${p.recommended_words || "不限"}；标题风格 ${p.title_style || "不限"}；外链 ${p.allows_external_links || "不限"}`
+  ).join("\n");
+
+  return `你是一个擅长多平台内容分发的中文内容运营专家。请把下面这篇原文章改写成 ${platforms.length} 个不同平台的差异化版本，每个版本都要符合该平台的内容风格和规则。
+
+## 原文章
+- 标题：${article.title || ""}
+- 摘要：${article.summary || ""}
+- 类型：${article.content_type || ""}
+- 关键词：${article.keywords || ""}
+
+正文：
+${article.body || ""}
+
+## 目标平台
+${platformList}
+
+## 产品背景
+- 名称：${product?.name || ""}
+- 卖点：${product?.selling_points || ""}
+- 禁用表达：${product?.forbidden_words || ""}
+
+## 要求
+1. 每个版本保留原文核心信息，但标题、开头、结构、语气都要按平台特点改写
+2. 不要简单替换关键词，要真正按平台用户阅读习惯重构
+3. 不要编造不存在的数据、案例、用户评价
+4. 如果平台禁止外链，把产品介绍改为自然搜索提示（如"在 XX 搜索 XX"）
+5. 输出 JSON 数组，每个对象对应一个平台版本
+
+## JSON 输出字段
+- target_platform：平台名
+- title：改写后的标题
+- summary：80 字以内摘要
+- body：改写后的正文 Markdown
+- content_type：内容类型
+- keywords：关键词
+- tags：标签
+- image_prompt：配图建议
+- risk_notes：风险提示`;
+}
+
+// ===== 发布前检查清单 =====================================================
+
+/**
+ * 生成发布前检查清单 Prompt
+ * @param {Object} article 文章
+ * @param {Object} platform 平台
+ */
+function buildPublishChecklist(article, platform) {
+  return `你是发布前审核助手。请为以下文章生成发布到「${platform.name || ""}」前的检查清单。
+
+## 文章
+- 标题：${article.title || ""}
+- 摘要：${article.summary || ""}
+- 关键词：${article.keywords || ""}
+- 标签：${article.tags || ""}
+
+正文（前 500 字）：
+${(article.body || "").slice(0, 500)}
+
+## 平台规则
+- 名称：${platform.name || ""}
+- 内容风格：${platform.content_style || ""}
+- 推荐字数：${platform.recommended_words || "不限"}
+- 标题风格：${platform.title_style || "不限"}
+- 标签规则：${platform.tags_rule || "不限"}
+- 外链限制：${platform.allows_external_links || "不限"}
+- 软文适配：${platform.soft_article_fit || ""}
+
+## 要求
+输出 JSON 对象：
+{
+  "score": 0-100 的合规分数,
+  "checks": [
+    { "item": "检查项", "status": "pass|warn|fail", "suggestion": "改进建议（如通过则为空）" }
+  ],
+  "summary": "总体评估，30 字以内"
+}
+
+检查项至少包含：
+1. 字数是否达标
+2. 标题是否符合平台风格
+3. 是否有违禁词/广告法风险
+4. 外链是否合规
+5. 标签是否齐全
+6. 开头是否吸引人（前 100 字）
+7. 是否有具体的 CTA（行动召唤）`;
+}
+
+// ===== SEO 优化建议 =======================================================
+
+/**
+ * SEO 优化建议 Prompt
+ * @param {Object} article 文章
+ * @param {Array} keywords 目标关键词
+ */
+function buildSeoOptimizePrompt(article, keywords) {
+  return `你是 SEO 优化专家。请分析以下文章的 SEO 表现，并给出具体优化建议。
+
+## 文章
+- 标题：${article.title || ""}
+- 摘要：${article.summary || ""}
+- 当前关键词：${article.keywords || ""}
+- 目标关键词：${(keywords || []).join("、") || "未指定"}
+
+正文：
+${article.body || ""}
+
+## 要求
+输出 JSON 对象：
+{
+  "score": 0-100 的 SEO 分数,
+  "keyword_density": { "关键词": 出现次数 },
+  "suggestions": [
+    { "type": "title|summary|body|structure|keywords", "issue": "问题描述", "fix": "具体修改建议" }
+  ],
+  "optimized_title": "优化后的标题",
+  "optimized_summary": "优化后的摘要",
+  "extra_keywords": ["建议新增的关键词1", "关键词2"]
+}
+
+评估维度：
+1. 标题是否包含核心关键词且在 15-30 字内
+2. 摘要是否自然包含 2-3 个关键词
+3. 关键词密度是否合理（2-5%）
+4. 是否使用 H2/H3 分段
+5. 是否有列表/加粗等便于爬虫解析的结构
+6. 是否有内链/外链建议
+7. 移动端可读性`;
+}
+
+// ===== 平台最佳发布时间 ===================================================
+
+// 各平台最佳发布时间建议（基于公开数据）
+const PLATFORM_BEST_TIME = {
+  "微信公众号": { weekday: "周二-周四", time: "20:00-22:00", note: "晚间阅读高峰，周末效果较差" },
+  "知乎": { weekday: "周二-周五", time: "11:00-13:00, 20:00-23:00", note: "午休和睡前阅读高峰" },
+  "小红书": { weekday: "周三-周五", time: "12:00-13:00, 19:00-21:00", note: "午休和晚间活跃度最高" },
+  "今日头条": { weekday: "周一-周五", time: "07:00-09:00, 12:00-13:00, 18:00-20:00", note: "通勤、午休、下班时段" },
+  "百家号": { weekday: "周二-周四", time: "09:00-11:00, 14:00-16:00", note: "工作时间阅读较多" },
+  "抖音": { weekday: "周二-周四", time: "12:00-13:00, 18:00-22:00", note: "午休和晚间是流量高峰" },
+  "B站": { weekday: "周五-周日", time: "18:00-23:00", note: "周末晚间投稿效果最好" },
+  "微博": { weekday: "周二-周四", time: "12:00-13:00, 21:00-23:00", note: "午休和睡前活跃" },
+  "掘金": { weekday: "周二-周四", time: "09:00-11:00, 20:00-22:00", note: "工作日技术内容阅读高峰" },
+  "CSDN": { weekday: "周一-周五", time: "09:00-11:00, 14:00-16:00", note: "工作时间阅读为主" },
+};
+
+/**
+ * 根据平台名获取最佳发布时间建议
+ * @param {string} platformName
+ * @returns {Object|null}
+ */
+function getPlatformBestPublishTime(platformName) {
+  if (!platformName) return null;
+  // 模糊匹配
+  for (const [key, value] of Object.entries(PLATFORM_BEST_TIME)) {
+    if (platformName.includes(key) || key.includes(platformName)) return { platform: key, ...value };
+  }
+  return null;
+}
+
 // ===== 挂载到全局 ==========================================================
 
 window.buildProductPrompt = buildProductPrompt;
 window.buildGeoQuestionPrompt = buildGeoQuestionPrompt;
 window.buildProductProfilePrompt = buildProductProfilePrompt;
 window.buildAdaptationPrompt = buildAdaptationPrompt;
+window.buildContentRepurposePrompt = buildContentRepurposePrompt;
+window.buildPublishChecklist = buildPublishChecklist;
+window.buildSeoOptimizePrompt = buildSeoOptimizePrompt;
+window.getPlatformBestPublishTime = getPlatformBestPublishTime;
+window.PLATFORM_BEST_TIME = PLATFORM_BEST_TIME;
 window.extractJsonArray = extractJsonArray;
 window.extractJsonObject = extractJsonObject;
 window.callImageGeneration = callImageGeneration;

@@ -87,11 +87,13 @@ function handleFabAction(action) {
   switch (action) {
     case "add-product":
       showView("products");
-      switchSubTab("product-add");
+      showProductEditMode({ id: "", name: "", type: "", url: "", audience: "", selling_points: "", competitors: "", tone: "真实、专业、克制", goal: "", forbidden_words: "" });
       break;
     case "add-article":
       showView("workshop");
-      switchSubTab("generate");
+      // 展开 AI 生成折叠区
+      const genDetail = document.querySelector(".workshop-generate");
+      if (genDetail) genDetail.open = true;
       break;
     case "add-task":
       showView("tasks");
@@ -105,15 +107,16 @@ function handleQuickAction(action) {
   switch (action) {
     case "add-product":
       showView("products");
-      switchSubTab("product-add");
+      showProductEditMode({ id: "", name: "", type: "", url: "", audience: "", selling_points: "", competitors: "", tone: "真实、专业、克制", goal: "", forbidden_words: "" });
       break;
     case "generate-content":
       showView("workshop");
-      switchSubTab("generate");
+      const genDetail2 = document.querySelector(".workshop-generate");
+      if (genDetail2) genDetail2.open = true;
       break;
     case "add-platform":
       showView("platforms");
-      switchSubTab("platform-add");
+      showPlatformEditMode({ id: "", name: "", category: "", url: "", account_name: "", login_notes: "", content_style: "", recommended_words: "", frequency: "", title_style: "", tags_rule: "", allows_external_links: "limited", soft_article_fit: "medium", status: "enabled", notes: "" });
       break;
     case "add-task":
       showView("tasks");
@@ -250,10 +253,10 @@ function showShareCard(taskId) {
   const quality = calcContentQuality(task.article_body, task.article_title);
 
   const modal = document.createElement("div");
-  modal.className = "modal-overlay";
+  modal.className = "share-card-modal-overlay";
   modal.id = "shareCardModal";
   modal.innerHTML = `
-    <div class="modal-content share-card-modal">
+    <div class="share-card-modal-content share-card-modal">
       <div class="share-card-preview">
         <div class="share-card-header">
           <span class="share-card-badge">✨ GEO 内容分享</span>

@@ -1,0 +1,25 @@
+# ============================================================
+# GEO Studio — Docker Compose 一键部署
+# 用法: docker compose up -d
+# ============================================================
+
+services:
+  geo-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geo-studio
+    restart: unless-stopped
+    ports:
+      - "8085:8085"   # PocketBase API + 前端静态资源
+    volumes:
+      - ./pocketbase/pb_data:/pb/pb_data
+      - ./pocketbase/pb_migrations:/pb/pb_migrations:ro
+    environment:
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8085/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
