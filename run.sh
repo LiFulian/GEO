@@ -86,7 +86,7 @@ start_pb() {
   fi
   # 在 PB_DIR 下启动，确保 PocketBase 能找到同目录的 pb_migrations/ 与 pb_hooks/
   pushd "$PB_DIR" > /dev/null
-  "$PB_BIN" serve --http=127.0.0.1:8085 --dir="$PB_DATA" > /tmp/geo_pb.log 2>&1 &
+  "$PB_BIN" serve --http=0.0.0.0:8085 --dir="$PB_DATA" > /tmp/geo_pb.log 2>&1 &
   local pid=$!
   echo "$pid" > "$PB_PID_FILE"
   popd > /dev/null
@@ -113,7 +113,7 @@ start_vite() {
     sleep 1
   fi
   cd "$FE_DIR"
-  npx vite --port 5175 --strictPort > /tmp/geo_vite.log 2>&1 &
+  npx vite --port 5175 --host 0.0.0.0 --strictPort > /tmp/geo_vite.log 2>&1 &
   local pid=$!
   echo "$pid" > "$VITE_PID_FILE"
   cd "$SCRIPT_DIR"
