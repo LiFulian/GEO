@@ -9,8 +9,10 @@ const state = {
   tasks: [],
   ai_settings: {},
   user_models: [],
+  geo_rank_checks: [],
   coverage: { by_question: [], by_product: [], summary: { total_q: 0, covered_q: 0, rate: 0, high_priority_gaps: 0 } },
-  selectedProductId: null,
+  // 注意：产品的选中状态保存在 render.js 顶层 `selectedProductId`（历史遗留），
+  // 这里不再重复声明 `state.selectedProductId` 以免误用。
   selectedArticleId: null,
   selectedPlatformId: null,
   taskCalendarDate: new Date(),

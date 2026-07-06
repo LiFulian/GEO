@@ -9,7 +9,9 @@
 // ===== 第一层：配置 =======================================================
 
 const CONFIG = {
-  pbUrl: (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "http://127.0.0.1:8085",
+  // 默认空字符串 → 同源调用 /api/...（dev 走 vite proxy，prod 走 PocketBase 同源）
+  // 仅当后端与前端不同源时，由 vite 插件注入的 window.__GEO_CONFIG__.pbUrl 覆盖
+  pbUrl: (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "",
 };
 
 // ===== 用户认证 ==========================================================
@@ -303,7 +305,92 @@ function cleanPayload(payload) {
   return rest;
 }
 
-// ===== AI 端点处理（前端直连） =============================================
+// 全量分页拉取某个集合的所有记录（避免 perPage=500 静默截断重度用户的数据）
+async function fetchAllRecords(coll, { expand = "", sort = "" } = {}) {
+  const all = [];
+  let page = 1;
+  const perPage = 500;
+  while (true) {
+    const params = new URLSearchParams();
+    params.set("perPage", String(perPage));
+    params.set("page", String(page));
+    if (expand) params.set("expand", expand);
+    if (sort) params.set("sort", sort);
+    const data = await apiRequest(`/api/collections/${coll}/records?${params.toString()}`);
+    const items = data.items || [];
+    for (const it of items) all.push(it);
+    const totalPages = data.totalPages || Math.ceil((data.totalItems || 0) / perPage) || 1;
+    if (page >= totalPages || items.length === 0) break;
+    page++;
+  }
+  return all;
+}
+
+// 把 publish_tasks 的 expand（article_id / platform_id）展平到任务对象上
+function flattenTaskExpand(t, expand) {
+  if (!expand) return t;
+  if (expand.article_id) {
+    const a = expand.article_id;
+    t.article_title = a.title || "";
+    t.article_summary = a.summary || "";
+    t.article_body = a.body || "";
+    t.article_keywords = a.keywords || "";
+    t.article_tags = a.tags || "";
+    t.article_image_prompt = a.image_prompt || "";
+    t.article_risk_notes = a.risk_notes || "";
+    t.product_id = a.product_id || "";
+  }
+  if (expand.platform_id) {
+    const p = expand.platform_id;
+    t.platform_name = p.name || "";
+    t.platform_url = p.url || "";
+    t.platform_category = p.category || "";
+    t.platform_account_name = p.account_name || "";
+    t.platform_login_notes = p.login_notes || "";
+  }
+  return t;
+}
+
+// ===== AI 端点处理（前端直连，经同源代理规避 CORS） =============================================
+
+// 统一的 AI HTTP 请求：优先走 PocketBase 同源代理 /api/ai/proxy（规避浏览器跨域），
+// 代理不可用（404/未部署 hook）或网络异常时回退到浏览器直连（兼容智谱等允许跨域的厂商）。
+// headers / bodyObj 为发往上游 AI 厂商的请求头与请求体。
+async function aiFetch(targetUrl, headers, bodyObj) {
+  const proxyUrl = `${CONFIG.pbUrl}/api/ai/proxy`;
+  try {
+    const token = await apiAuth();
+    const proxyRes = await fetch(proxyUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: token },
+      body: JSON.stringify({ url: targetUrl, method: "POST", headers, body: bodyObj }),
+    });
+    if (proxyRes.status !== 404) {
+      const data = await proxyRes.json().catch(() => null);
+      if (!proxyRes.ok) {
+        const msg = (data && data.error && data.error.message) || `HTTP ${proxyRes.status}`;
+        throw new ApiError(`AI 调用失败：${msg}`, proxyRes.status);
+      }
+      return data;
+    }
+    // 404 → 代理未挂载，落到下方直连
+  } catch (err) {
+    if (err instanceof ApiError) throw err; // 代理已返回的错误，原样抛出
+    // 其它异常（网络/CORS）→ 回退直连
+  }
+
+  // 直连（兜底）
+  const res = await fetch(targetUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(bodyObj),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ApiError(`AI 调用失败：${err.error?.message || `HTTP ${res.status}`}`, res.status);
+  }
+  return await res.json();
+}
 
 async function callAI(settings, messages) {
   const baseUrl = settings.text_base_url || settings.base_url || "https://open.bigmodel.cn/api/paas/v4";
@@ -314,21 +401,11 @@ async function callAI(settings, messages) {
 
   const temperature = parseFloat(settings.temperature || 0.7);
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model, messages, temperature }),
-  });
+  const data = await aiFetch(`${baseUrl}/chat/completions`, {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  }, { model, messages, temperature });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new ApiError(`AI 调用失败：${err.error?.message || `HTTP ${res.status}`}`, res.status);
-  }
-
-  const data = await res.json();
   return data.choices[0].message.content;
 }
 
@@ -354,12 +431,13 @@ async function geoApi(path, options = {}) {
     const coll = translated.collection;
 
     if (method === "GET") {
-      let queryPath = `/api/collections/${coll}/records?perPage=500`;
-      if (coll === "publish_tasks") queryPath += "&expand=article_id,platform_id";
-      if (coll !== "publish_tasks" && coll !== "ai_settings" && coll !== "user_models") queryPath += "&sort=-updated_at";
-
-      const data = await apiRequest(queryPath);
-      return (data.items || []).map(pbRecordToApp);
+      // 这些集合不按 -updated_at 排序：publish_tasks 在 bootstrap 内单独排序+expand；
+      // ai_settings / user_models / product_images 历史迁移未含时间字段，跳过避免 400。
+      const skipSort = coll === "publish_tasks" || coll === "ai_settings" || coll === "user_models" || coll === "product_images";
+      const sort = skipSort ? "" : "-updated_at";
+      const expand = coll === "publish_tasks" ? "article_id,platform_id" : "";
+      const items = await fetchAllRecords(coll, { expand, sort });
+      return items.map(pbRecordToApp);
     }
 
     if (method === "POST") {
@@ -385,7 +463,8 @@ async function geoApi(path, options = {}) {
       let queryPath = `/api/collections/${collection}/records/${id}`;
       if (collection === "publish_tasks") queryPath += "?expand=article_id,platform_id";
       const data = await apiRequest(queryPath);
-      return pbRecordToApp(data);
+      const rec = pbRecordToApp(data);
+      return collection === "publish_tasks" ? flattenTaskExpand(rec, data.expand) : rec;
     }
 
     if (method === "PUT" || method === "PATCH") {
@@ -410,68 +489,42 @@ async function geoApi(path, options = {}) {
 // ===== Bootstrap ==========================================================
 
 async function apiBootstrap() {
-  const token = await apiAuth();
-  const headers = { Authorization: token };
-  const base = `${CONFIG.pbUrl}/api/collections`;
-
-  const [productsRes, geoRes, platformsRes, articlesRes, tasksRes, aiRes, modelsRes, imagesRes] = await Promise.all([
-    fetch(`${base}/products/records?perPage=500&sort=-updated_at`, { headers }),
-    fetch(`${base}/geo_questions/records?perPage=500&sort=-updated_at`, { headers }),
-    fetch(`${base}/platforms/records?perPage=500&sort=status,category,name`, { headers }),
-    fetch(`${base}/articles/records?perPage=500&sort=-updated_at`, { headers }),
-    fetch(`${base}/publish_tasks/records?perPage=500&expand=article_id,platform_id&sort=-updated_at`, { headers }),
-    fetch(`${base}/ai_settings/records`, { headers }),
-    fetch(`${base}/user_models/records?perPage=500`, { headers }),
-    fetch(`${base}/product_images/records?perPage=500`, { headers }),
+  const [productsRaw, geoRaw, platformsRaw, articlesRaw, tasksRaw, aiRaw, modelsRaw, imagesRaw, checksRaw] = await Promise.all([
+    fetchAllRecords("products", { sort: "-updated_at" }),
+    fetchAllRecords("geo_questions", { sort: "-updated_at" }),
+    fetchAllRecords("platforms", { sort: "status,category,name" }),
+    fetchAllRecords("articles", { sort: "-updated_at" }),
+    fetchAllRecords("publish_tasks", { expand: "article_id,platform_id", sort: "-updated_at" }),
+    fetchAllRecords("ai_settings"),
+    fetchAllRecords("user_models"),
+    fetchAllRecords("product_images"),
+    // geo_rank_checks 是新集合；若用户的 PB 尚未跑迁移（集合不存在），降级为空数组而非整体崩溃
+    fetchAllRecords("geo_rank_checks", { sort: "-created_at" }).catch(() => []),
   ]);
 
-  const products = ((await productsRes.json()).items || []).map(pbRecordToApp);
-  const platforms = ((await platformsRes.json()).items || []).map(pbRecordToApp);
-  const articles = ((await articlesRes.json()).items || []).map(pbRecordToApp);
+  const products = productsRaw.map(pbRecordToApp);
+  const platforms = platformsRaw.map(pbRecordToApp);
+  const articles = articlesRaw.map(pbRecordToApp);
 
-  const geoQuestions = ((await geoRes.json()).items || []).map(r => {
+  const geoQuestions = geoRaw.map(r => {
     const q = pbRecordToApp(r);
     const product = products.find(p => String(p.id) === String(q.product_id));
     q.product_name = product ? product.name : "";
     return q;
   });
 
-  const tasks = ((await tasksRes.json()).items || []).map(r => {
-    const t = pbRecordToApp(r);
-    if (r.expand) {
-      if (r.expand.article_id) {
-        const a = r.expand.article_id;
-        t.article_title = a.title || "";
-        t.article_summary = a.summary || "";
-        t.article_body = a.body || "";
-        t.article_keywords = a.keywords || "";
-        t.article_tags = a.tags || "";
-        t.article_image_prompt = a.image_prompt || "";
-        t.article_risk_notes = a.risk_notes || "";
-        t.product_id = a.product_id || "";
-      }
-      if (r.expand.platform_id) {
-        const p = r.expand.platform_id;
-        t.platform_name = p.name || "";
-        t.platform_url = p.url || "";
-        t.platform_category = p.category || "";
-        t.platform_account_name = p.account_name || "";
-        t.platform_login_notes = p.login_notes || "";
-      }
-    }
-    return t;
-  });
+  const tasks = tasksRaw.map(r => flattenTaskExpand(pbRecordToApp(r), r.expand));
 
-  const aiItems = ((await aiRes.json()).items || []).map(pbRecordToApp);
+  const aiItems = aiRaw.map(pbRecordToApp);
   const aiSettings = aiItems.length > 0 ? aiItems[0] : null;
 
-  const userModels = ((await modelsRes.json()).items || []).map(pbRecordToApp);
-
-  const productImages = ((await imagesRes.json()).items || []).map(pbRecordToApp);
+  const userModels = modelsRaw.map(pbRecordToApp);
+  const productImages = imagesRaw.map(pbRecordToApp);
+  const geoRankChecks = checksRaw.map(pbRecordToApp);
 
   const coverage = apiCoverageInternal(products, geoQuestions, articles, tasks);
 
-  return { products, geo_questions: geoQuestions, platforms, articles, tasks, ai_settings: aiSettings, user_models: userModels, product_images: productImages, coverage };
+  return { products, geo_questions: geoQuestions, platforms, articles, tasks, ai_settings: aiSettings, user_models: userModels, product_images: productImages, geo_rank_checks: geoRankChecks, coverage };
 }
 
 // ===== Coverage & Backup ==================================================
@@ -538,16 +591,20 @@ async function apiBackupExport() {
 // ===== Assign Tasks =======================================================
 
 async function apiAssignTasks({ article_ids, platform_ids }) {
-  const currentTasks = (await apiRequest(`/api/collections/publish_tasks/records?perPage=500`)).items || [];
+  const currentTasks = await fetchAllRecords("publish_tasks");
   const created = [];
   const skipped = [];
+  const now = new Date().toISOString();
   for (const aid of article_ids) {
     for (const pid of platform_ids) {
       const exists = currentTasks.find(t => t.article_id === String(aid) && t.platform_id === String(pid));
       if (exists) { skipped.push(exists.id); continue; }
       const data = await apiRequest("/api/collections/publish_tasks/records", {
         method: "POST",
-        body: { article_id: String(aid), platform_id: String(pid), status: "todo", user_id: getCurrentUserId() },
+        body: {
+          article_id: String(aid), platform_id: String(pid), status: "todo",
+          user_id: getCurrentUserId(), created_at: now, updated_at: now,
+        },
       });
       created.push(data.id);
     }
@@ -559,6 +616,7 @@ async function apiAssignTasks({ article_ids, platform_ids }) {
 
 window.geoApi = geoApi;
 window.callAI = callAI;
+window.aiFetch = aiFetch;
 window.ApiError = ApiError;
 window.NotFoundError = NotFoundError;
 window.ValidationError = ValidationError;

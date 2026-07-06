@@ -89,7 +89,7 @@ start.bat
 docker compose up -d
 ```
 
-打开 http://localhost:5175 即可。详见 [Docker 部署文档](#docker-部署)。
+打开 http://localhost:8085 即可（Docker 模式下前端由 PocketBase 同源托管）。详见 [Docker 部署文档](#docker-部署)。
 
 ## 功能特性
 
@@ -151,7 +151,7 @@ docker compose up -d
   - 本地 Ollama 网关
 - 双模式：手动 Prompt 模式 / API 直连模式
 - 自定义模型：添加任意 OpenAI-compatible 接口
-- API Key 加密存储
+- API Key 按 user_id 隔离存储（明文存于本地 SQLite，仅本人可读写；请使用受限 Key）
 
 ### 7. 全局增强
 
@@ -229,8 +229,9 @@ docker compose down
 ```
 
 服务暴露：
-- 前端：http://localhost:5175
-- 后端 API：http://localhost:8085
+- 前端 + 后端 API：http://localhost:8085（PocketBase 同时托管静态资源与 `/api/*`）
+
+> 注：Docker 模式下前端由 PocketBase 的 `pb_public` 同源提供，因此浏览器访问的就是 8085；`run.sh` 本地开发模式才是前端 5175 + 后端 8085 双端口。
 
 数据持久化：通过 volume 挂载 `./pocketbase/pb_data` 到容器。
 
@@ -310,7 +311,7 @@ bash run.sh stop
 VER="0.39.4"  # 替换为最新版本
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
-[ "$ARCH" = "arm64" ] && ARCH="arm64" || ARCH="amd64"
+case "$ARCH" in x86_64|amd64) ARCH="amd64" ;; aarch64|arm64) ARCH="arm64" ;; *) echo "不支持的架构: $ARCH"; exit 1 ;; esac
 curl -L -o /tmp/pb.zip \
   "https://github.com/pocketbase/pocketbase/releases/download/v${VER}/pocketbase_${VER}_${OS}_${ARCH}.zip"
 unzip -o /tmp/pb.zip -d pocketbase/

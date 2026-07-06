@@ -39,7 +39,8 @@ function addGlobalAiMsg(role, content) {
   if (!container) return;
   const msg = document.createElement("div");
   msg.className = `global-ai-msg ${role}`;
-  msg.innerHTML = markdownToHtml(content).replace(/\n/g, "<br>");
+  // markdownToHtml 内部已转义并把换行转成 <br>，无需再额外替换（否则会产生多余空行）
+  msg.innerHTML = markdownToHtml(content);
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
   globalAiHistory.push({ role, content });
@@ -183,7 +184,12 @@ function showToast(message, type = "info", duration = 3000) {
   const icons = { success: "✅", error: "❌", warning: "⚠️", info: "💡", celebrate: "🎉" };
   const toast = document.createElement("div");
   toast.className = `toast toast-${finalType}`;
-  toast.innerHTML = `<span class="toast-icon">${icons[finalType] || "💡"}</span><span class="toast-msg">${message}</span>`;
+  // 安全：message 走 textContent，杜绝 XSS（toast 常用于展示含用户/AI 数据的 err.message）
+  toast.innerHTML = `<span class="toast-icon">${icons[finalType] || "💡"}</span>`;
+  const msgEl = document.createElement("span");
+  msgEl.className = "toast-msg";
+  msgEl.textContent = message;
+  toast.appendChild(msgEl);
   container.appendChild(toast);
 
   requestAnimationFrame(() => toast.classList.add("show"));
@@ -203,11 +209,12 @@ const ACHIEVEMENTS = [
   { id: "three_products", icon: "🎯", name: "多线作战", desc: "管理3个产品", check: () => (state.products || []).length >= 3 },
   { id: "coverage_50", icon: "📊", name: "半壁江山", desc: "GEO覆盖率达到50%", check: () => {
     const cov = (state.coverage && state.coverage.by_product) || [];
-    return cov.some(c => (c.rate || 0) >= 50);
+    // rate 存储为 0–1 的小数（见 api-client.js apiCoverageInternal），需 ×100 再比较
+    return cov.some(c => (c.rate || 0) * 100 >= 50);
   }},
   { id: "coverage_100", icon: "👑", name: "大满贯", desc: "单个产品GEO覆盖率100%", check: () => {
     const cov = (state.coverage && state.coverage.by_product) || [];
-    return cov.some(c => (c.rate || 0) >= 100);
+    return cov.some(c => (c.rate || 0) * 100 >= 100);
   }},
 ];
 
@@ -276,9 +283,9 @@ function showShareCard(taskId) {
         </div>
       </div>
       <div class="share-card-actions">
-        <button class="btn primary" id="copyShareText">📋 复制分享文本</button>
-        <button class="btn ghost" id="copyShareUrl">🔗 仅复制链接</button>
-        <button class="btn ghost modal-close">关闭</button>
+        <button class="btn primary" id="copyShareText" type="button">📋 复制分享文本</button>
+        <button class="btn ghost" id="copyShareUrl" type="button">🔗 仅复制链接</button>
+        <button class="btn ghost modal-close" type="button">关闭</button>
       </div>
     </div>
   `;
@@ -404,19 +411,12 @@ function initShortcuts() {
       $("#globalSearch")?.select();
     }
 
-    if (mod && e.key === "n" && !isInput) {
-      e.preventDefault();
-      toggleFab();
-    }
-
+    // 注：Ctrl+N / Ctrl+D / Ctrl+L 曾用作「新建/主题/刷新」快捷键，
+    // 但它们分别与浏览器「新窗口 / 收藏书签 / 聚焦地址栏」冲突，会劫持用户预期，
+    // 因此移除——这些功能都有可见的 UI 入口（FAB / 🌙 主题钮 / 顶部「刷新」按钮）。
     if (mod && e.key === "/" && !isInput) {
       e.preventDefault();
       toggleGlobalAi();
-    }
-
-    if (mod && e.key === "d" && !isInput) {
-      e.preventDefault();
-      toggleTheme();
     }
 
     // Ctrl+S 快速保存（在 workshop / products 视图下，输入框内也生效）
@@ -431,12 +431,6 @@ function initShortcuts() {
         // 其他视图的输入框不拦截
         if (isFormInput) return;
       }
-    }
-
-    // Ctrl+L 刷新数据（避免与浏览器 Ctrl+R 冲突）
-    if (mod && e.key === "l" && !isInput) {
-      e.preventDefault();
-      if (typeof load === "function") load();
     }
 
     if (e.key === "Escape") {

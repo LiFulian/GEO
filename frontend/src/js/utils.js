@@ -98,22 +98,8 @@ function selectedValues(selector) {
 }
 
 // --- JSON Parsing ---
-
-function parseJsonObjectText(text) {
-  let value = text.trim();
-  if (value.startsWith("```")) {
-    value = value.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? (parsed[0] || {}) : parsed;
-  } catch {
-    const start = value.indexOf("{");
-    const end = value.lastIndexOf("}");
-    if (start === -1 || end === -1 || end <= start) throw new Error("没有找到可解析的 JSON 对象");
-    return JSON.parse(value.slice(start, end + 1));
-  }
-}
+// 注意：更健壮的 JSON 解析在 ai-prompts.js 的 extractJsonObject / extractJsonArray，
+// 新代码请直接用那两个；本函数已废弃删除以避免两套实现并存。
 
 function normalizeProductSuggestion(item) {
   return {
@@ -144,30 +130,90 @@ function markdownToHtml(text) {
   if (!text) return "";
   const lines = escapeHtml(text).split("\n");
   let html = [];
-  let inList = false;
+  let listType = null; // null | "ul" | "ol"
   let inQuote = false;
+  const closeList = () => { if (listType === "ul") html.push("</ul>"); else if (listType === "ol") html.push("</ol>"); listType = null; };
+  const closeQuote = () => { if (inQuote) { html.push("</blockquote>"); inQuote = false; } };
   for (let line of lines) {
-    // 标题
     let m;
-    if (m = line.match(/^### (.*)$/)) { if (inList) { html.push("</ul>"); inList = false; } if (inQuote) { html.push("</blockquote>"); inQuote = false; } html.push(`<h3>${m[1]}</h3>`); continue; }
-    if (m = line.match(/^## (.*)$/)) { if (inList) { html.push("</ul>"); inList = false; } if (inQuote) { html.push("</blockquote>"); inQuote = false; } html.push(`<h2>${m[1]}</h2>`); continue; }
-    if (m = line.match(/^# (.*)$/)) { if (inList) { html.push("</ul>"); inList = false; } if (inQuote) { html.push("</blockquote>"); inQuote = false; } html.push(`<h1>${m[1]}</h1>`); continue; }
-    // 列表
-    if (m = line.match(/^[-*] (.*)$/)) { if (inQuote) { html.push("</blockquote>"); inQuote = false; } if (!inList) { html.push("<ul>"); inList = true; } html.push(`<li>${m[1]}</li>`); continue; }
-    if (inList) { html.push("</ul>"); inList = false; }
-    // 引用
-    if (m = line.match(/^&gt; (.*)$/)) { if (!inQuote) { html.push("<blockquote>"); inQuote = true; } html.push(m[1] + "<br>"); continue; }
-    if (inQuote) { html.push("</blockquote>"); inQuote = false; }
+    // 标题
+    if (m = line.match(/^### (.*)$/)) { closeList(); closeQuote(); html.push(`<h3>${m[1]}</h3>`); continue; }
+    if (m = line.match(/^## (.*)$/)) { closeList(); closeQuote(); html.push(`<h2>${m[1]}</h2>`); continue; }
+    if (m = line.match(/^# (.*)$/)) { closeList(); closeQuote(); html.push(`<h1>${m[1]}</h1>`); continue; }
+    // 有序列表
+    if (m = line.match(/^\d+\.\s+(.*)$/)) { closeQuote(); if (listType !== "ol") { closeList(); html.push("<ol>"); listType = "ol"; } html.push(`<li>${m[1]}</li>`); continue; }
+    // 无序列表
+    if (m = line.match(/^[-*] (.*)$/)) { closeQuote(); if (listType !== "ul") { closeList(); html.push("<ul>"); listType = "ul"; } html.push(`<li>${m[1]}</li>`); continue; }
+    closeList();
+    // 引用（不手动追加 <br>，交给末尾统一的换行处理，避免双 <br>）
+    if (m = line.match(/^&gt; (.*)$/)) { if (!inQuote) { html.push("<blockquote>"); inQuote = true; } html.push(m[1]); continue; }
+    closeQuote();
     // 空行
     if (!line.trim()) { html.push(""); continue; }
     // 普通行
     html.push(line);
   }
-  if (inList) html.push("</ul>");
-  if (inQuote) html.push("</blockquote>");
+  closeList();
+  closeQuote();
   return html.join("\n")
+    // 图片（仅放行 http(s)）
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (__, alt, url) =>
+      /^https?:\/\//i.test(url) ? `<img src="${url}" alt="${alt}" loading="lazy" />` : (alt || ""))
+    // 链接（仅放行 http(s)/mailto，阻断 javascript:/data: 等协议）
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (__, txt, url) =>
+      /^(https?:|mailto:)/i.test(url) ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${txt}</a>` : txt)
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(/`(.*?)`/g, '<code>$1</code>')
     .replace(/\n/g, '<br>');
+}
+
+// ===== 数据导出（CSV / JSON）=====
+
+// 触发浏览器下载
+function downloadFile(filename, content, mime = "text/plain;charset=utf-8") {
+  const blob = new Blob(["﻿" + content], { type: mime }); // BOM 让 Excel 正确识别 UTF-8
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// 把对象数组转成 CSV（cols: [{key, label}]）
+function toCSV(rows, cols) {
+  const esc = (v) => {
+    const s = (v == null ? "" : String(v)).replace(/"/g, '""');
+    return /[",\n]/.test(s) ? `"${s}"` : s;
+  };
+  const header = cols.map(c => esc(c.label)).join(",");
+  const body = rows.map(r => cols.map(c => esc(r[c.key])).join(",")).join("\n");
+  return header + "\n" + body;
+}
+
+// 导出某类实体为 CSV（按日期戳命名）
+function exportCSV(filenameStem, rows, cols) {
+  if (!rows || !rows.length) { showToast("没有可导出的数据", "warning"); return; }
+  const d = new Date().toISOString().slice(0, 10);
+  downloadFile(`${filenameStem}-${d}.csv`, toCSV(rows, cols), "text/csv;charset=utf-8");
+  showToast(`已导出 ${rows.length} 条`, "success");
+}
+
+// 全量 JSON 备份（当前账号可见的全部业务数据）
+function exportAllJSON() {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    products: state.products,
+    geo_questions: state.geo_questions,
+    articles: state.articles,
+    platforms: state.platforms,
+    tasks: state.tasks,
+    geo_rank_checks: state.geo_rank_checks,
+    product_images: (state.product_images || []).map(p => ({ ...p, image: "（文件需另行导出）" })),
+  };
+  const d = new Date().toISOString().slice(0, 10);
+  const total = Object.values(payload).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0);
+  downloadFile(`geo-backup-${d}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+  showToast(`已备份 ${total} 条记录`, "success");
 }

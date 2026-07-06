@@ -27,7 +27,12 @@ ensure_pb() {
     local os arch
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
     arch=$(uname -m)
-    [ "$arch" = "arm64" ] && arch="arm64" || arch="amd64"
+    # 规范化架构：x86_64 → amd64；aarch64/arm64 → arm64
+    case "$arch" in
+      x86_64|amd64) arch="amd64" ;;
+      aarch64|arm64) arch="arm64" ;;
+      *) echo -e "${RED}❌ 不支持的架构: $arch${NC}"; return 1 ;;
+    esac
     local ver="0.39.4"
     local url="https://github.com/pocketbase/pocketbase/releases/download/v${ver}/pocketbase_${ver}_${os}_${arch}.zip"
     mkdir -p "$PB_DIR"
@@ -79,9 +84,12 @@ start_pb() {
       return 1
     fi
   fi
+  # 在 PB_DIR 下启动，确保 PocketBase 能找到同目录的 pb_migrations/ 与 pb_hooks/
+  pushd "$PB_DIR" > /dev/null
   "$PB_BIN" serve --http=127.0.0.1:8085 --dir="$PB_DATA" > /tmp/geo_pb.log 2>&1 &
   local pid=$!
   echo "$pid" > "$PB_PID_FILE"
+  popd > /dev/null
   sleep 2
   if is_running "$pid" && curl -s http://127.0.0.1:8085/api/health > /dev/null 2>&1; then
     echo -e "${GREEN}✅ PocketBase 已启动 (PID $pid, 端口 8085)${NC}"

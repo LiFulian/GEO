@@ -1,6 +1,27 @@
 /// <reference path="../pb_data/types.d.ts" />
+//
+// 幂等版：PocketBase 0.39+ 在全新库会自动创建默认 `users` 集合，
+// 若直接 new Collection({name:"users"}) 会触发 "Collection name must be unique" 错误，
+// 导致整个迁移批次失败回滚 → 全新部署（Docker/新用户）启动崩溃。
+// 因此：若 users 已存在（PB 自动建），仅确保补上应用需要的 name 字段；不存在才完整创建。
 migrate((app) => {
-  const collection = new Collection({
+  let collection = null;
+  try { collection = app.findCollectionByNameOrId("users"); } catch (e) {}
+
+  if (collection) {
+    // PB 自动创建的 users 已存在：补上 name 字段（注册表单需要）
+    if (!collection.fields.some(f => f.name === "name")) {
+      collection.fields.add(new Field({
+        autogeneratePattern: "", hidden: false, id: "text3889317017", max: 0, min: 0,
+        name: "name", pattern: "", presentable: false, primaryKey: false, required: false, system: false, type: "text",
+      }));
+      app.save(collection);
+    }
+    return;
+  }
+
+  // 不存在则完整创建（保留原有配置：name 字段、auth 规则、邮件模板等）
+  collection = new Collection({
     "authAlert": {
       "emailTemplate": {
         "body": "<p>Hello,</p>\n<p>We noticed a login to your {APP_NAME} account from a new location:</p>\n<p><em>{ALERT_INFO}</em></p>\n<p><strong>If this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.</strong></p>\n<p>If this was you, you may disregard this email.</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
@@ -9,114 +30,24 @@ migrate((app) => {
       "enabled": true
     },
     "authRule": "",
-    "authToken": {
-      "duration": 432000
-    },
+    "authToken": { "duration": 432000 },
     "confirmEmailChangeTemplate": {
       "body": "<p>Hello,</p>\n<p>Click on the button below to confirm your new email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Confirm new email</a>\n</p>\n<p><i>If you didn't ask to change your email address, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
       "subject": "Confirm your {APP_NAME} new email address"
     },
     "createRule": "",
     "deleteRule": "id = @request.auth.id",
-    "emailChangeToken": {
-      "duration": 1800
-    },
+    "emailChangeToken": { "duration": 1800 },
     "fields": [
-      {
-        "autogeneratePattern": "[a-z0-9]{15}",
-        "help": "",
-        "hidden": false,
-        "id": "text3208210256",
-        "max": 15,
-        "min": 15,
-        "name": "id",
-        "pattern": "^[a-z0-9]+$",
-        "presentable": false,
-        "primaryKey": true,
-        "required": true,
-        "system": true,
-        "type": "text"
-      },
-      {
-        "autogeneratePattern": "",
-        "help": "",
-        "hidden": false,
-        "id": "text3889317017",
-        "max": 0,
-        "min": 0,
-        "name": "name",
-        "pattern": "",
-        "presentable": false,
-        "primaryKey": false,
-        "required": false,
-        "system": false,
-        "type": "text"
-      },
-      {
-        "cost": 0,
-        "help": "",
-        "hidden": true,
-        "id": "password901924565",
-        "max": 0,
-        "min": 8,
-        "name": "password",
-        "pattern": "",
-        "presentable": false,
-        "required": true,
-        "system": true,
-        "type": "password"
-      },
-      {
-        "autogeneratePattern": "[a-zA-Z0-9]{50}",
-        "help": "",
-        "hidden": true,
-        "id": "text2504183744",
-        "max": 60,
-        "min": 30,
-        "name": "tokenKey",
-        "pattern": "",
-        "presentable": false,
-        "primaryKey": false,
-        "required": true,
-        "system": true,
-        "type": "text"
-      },
-      {
-        "exceptDomains": null,
-        "help": "",
-        "hidden": false,
-        "id": "email3885137012",
-        "name": "email",
-        "onlyDomains": null,
-        "presentable": false,
-        "required": true,
-        "system": true,
-        "type": "email"
-      },
-      {
-        "help": "",
-        "hidden": false,
-        "id": "bool1547992806",
-        "name": "emailVisibility",
-        "presentable": false,
-        "required": false,
-        "system": true,
-        "type": "bool"
-      },
-      {
-        "help": "",
-        "hidden": false,
-        "id": "bool256245529",
-        "name": "verified",
-        "presentable": false,
-        "required": false,
-        "system": true,
-        "type": "bool"
-      }
+      { "autogeneratePattern": "[a-z0-9]{15}", "hidden": false, "id": "text3208210256", "max": 15, "min": 15, "name": "id", "pattern": "^[a-z0-9]+$", "presentable": false, "primaryKey": true, "required": true, "system": true, "type": "text" },
+      { "autogeneratePattern": "", "hidden": false, "id": "text3889317017", "max": 0, "min": 0, "name": "name", "pattern": "", "presentable": false, "primaryKey": false, "required": false, "system": false, "type": "text" },
+      { "cost": 0, "hidden": true, "id": "password901924565", "max": 0, "min": 8, "name": "password", "presentable": false, "required": true, "system": true, "type": "password" },
+      { "autogeneratePattern": "[a-zA-Z0-9]{50}", "hidden": true, "id": "text2504183744", "max": 60, "min": 30, "name": "tokenKey", "pattern": "", "presentable": false, "primaryKey": false, "required": true, "system": true, "type": "text" },
+      { "exceptDomains": null, "hidden": false, "id": "email3885137012", "name": "email", "onlyDomains": null, "presentable": false, "required": true, "system": true, "type": "email" },
+      { "hidden": false, "id": "bool1547992806", "name": "emailVisibility", "presentable": false, "required": false, "system": true, "type": "bool" },
+      { "hidden": false, "id": "bool256245529", "name": "verified", "presentable": false, "required": false, "system": true, "type": "bool" }
     ],
-    "fileToken": {
-      "duration": 180
-    },
+    "fileToken": { "duration": 180 },
     "id": "pbc_1736455494",
     "indexes": [
       "CREATE UNIQUE INDEX `idx_tokenKey_pbc_1736455494` ON `users` (`tokenKey`)",
@@ -124,59 +55,38 @@ migrate((app) => {
     ],
     "listRule": "id = @request.auth.id",
     "manageRule": null,
-    "mfa": {
-      "duration": 600,
-      "enabled": false,
-      "rule": ""
-    },
+    "mfa": { "duration": 600, "enabled": false, "rule": "" },
     "name": "users",
-    "oauth2": {
-      "enabled": false,
-      "mappedFields": {
-        "avatarURL": "",
-        "id": "",
-        "name": "",
-        "username": ""
-      }
-    },
+    "oauth2": { "enabled": false, "mappedFields": { "avatarURL": "", "id": "", "name": "", "username": "" } },
     "otp": {
       "duration": 180,
       "emailTemplate": {
         "body": "<p>Hello,</p>\n<p>Your one-time password is: <strong>{OTP}</strong></p>\n<p><i>If you didn't ask for the one-time password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
         "subject": "OTP for {APP_NAME}"
       },
-      "enabled": false,
-      "length": 8
+      "enabled": false, "length": 8
     },
-    "passwordAuth": {
-      "enabled": true,
-      "identityFields": [
-        "email"
-      ]
-    },
-    "passwordResetToken": {
-      "duration": 1800
-    },
+    "passwordAuth": { "enabled": true, "identityFields": ["email"] },
+    "passwordResetToken": { "duration": 1800 },
     "resetPasswordTemplate": {
-      "body": "<p>Hello,</p>\n<p>Click on the button below to reset your password.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Reset password</a>\n</p>\n<p><i>If you didn't ask to reset your password, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
+      "body": "<p>Hello,</p>\n<p>Click on the button below to reset your password.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Reset password</a></p>\n<p><i>If you didn't ask to reset your password, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
       "subject": "Reset your {APP_NAME} password"
     },
     "system": false,
     "type": "auth",
     "updateRule": "id = @request.auth.id",
     "verificationTemplate": {
-      "body": "<p>Hello,</p>\n<p>Thank you for joining us at {APP_NAME}.</p>\n<p>Click on the button below to verify your email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Verify</a>\n</p>\n<p><i>If you didn't recently register, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
+      "body": "<p>Hello,</p>\n<p>Thank you for joining us at {APP_NAME}.</p>\n<p>Click on the button below to verify your email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Verify</a></p>\n<p><i>If you didn't recently register, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
       "subject": "Verify your {APP_NAME} email"
     },
-    "verificationToken": {
-      "duration": 86400
-    },
+    "verificationToken": { "duration": 86400 },
     "viewRule": "id = @request.auth.id"
   });
 
-  return app.save(collection);
+  app.save(collection);
 }, (app) => {
-  const collection = app.findCollectionByNameOrId("pbc_1736455494");
-
-  return app.delete(collection);
+  // 回滚：按名字删（不依赖硬编码 id，容错 PB 自动建的 users）
+  let c = null;
+  try { c = app.findCollectionByNameOrId("users"); } catch (e) {}
+  if (c) app.delete(c);
 })

@@ -99,7 +99,7 @@ ${platformLines}
 - tags：逗号分隔标签（3-5 个）
 - image_prompt：配图建议（不需要则为空）
 - risk_notes：广告感/平台风险/需人工核实的信息
-- geo_question_id：主要回答的 GEO 问题 id（整数，无则填 0）
+- geo_question_id：主要回答的 GEO 问题 id（从上面「[id=...]」列表里原样复制该 id 字符串；无对应问题则填 0 或空字符串，不要编造 id）
 - faq：可选，FAQ 数组 [{q: "问题", a: "简短回答"}]，2-4 条`;
 }
 
@@ -108,11 +108,11 @@ ${platformLines}
  * 等效 Python: geo_question_prompt()
  */
 function buildGeoQuestionPrompt(product, count = 12) {
-  // 按比例分配各类问题，保证多样性
-  const discoveryCount = Math.max(2, Math.ceil(count * 0.3));   // 发现类
-  const comparisonCount = Math.max(2, Math.ceil(count * 0.25));  // 对比类
-  const howtoCount = Math.max(2, Math.ceil(count * 0.25));       // 操作类
-  const evaluationCount = count - discoveryCount - comparisonCount - howtoCount; // 评估类
+  // 按比例分配各类问题，保证多样性；用 floor 避免相加超过 count（evaluation 兜底吸收余数，永不为负）
+  const discoveryCount = Math.floor(count * 0.3);   // 发现类
+  const comparisonCount = Math.floor(count * 0.25);  // 对比类
+  const howtoCount = Math.floor(count * 0.25);       // 操作类
+  const evaluationCount = Math.max(0, count - discoveryCount - comparisonCount - howtoCount); // 评估类
 
   return `你是一个 GEO（Generative Engine Optimization）内容策略助手，擅长挖掘用户在 AI 助手中真实会问的问题。
 
@@ -292,7 +292,7 @@ function extractJsonArray(text) {
     }
   }
   if (!Array.isArray(parsed)) throw new Error("AI 返回结果不是 JSON 数组");
-  return parsed.filter(item => item && typeof item === "object");
+  return parsed; // 保留全部元素（可能是对象，也可能是字符串，如推荐列表）
 }
 
 /**
@@ -337,18 +337,13 @@ async function callImageGeneration(prompt, articleId) {
   let url = baseUrl.replace(/\/$/, "");
   if (!url.endsWith("/images/generations")) url += "/images/generations";
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, prompt }),
-  });
+  // 走同源代理（/api/ai/proxy）规避浏览器跨域；代理不可用时 aiFetch 会自动回退直连
+  const data = await aiFetch(url, {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  }, { model, prompt });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`图片生成失败：${err.error?.message || `HTTP ${res.status}`}`);
-  }
-
-  return await res.json();
+  return data;
 }
 
 // ===== 一鱼多吃：一篇文章改写为多平台版本 ==================================
@@ -492,6 +487,55 @@ ${article.body || ""}
 7. 移动端可读性`;
 }
 
+// ===== GEO 排名检测（citation check）=====================================
+
+// 让 AI 像真实助手那样回答 GEO 问题，再检测回答中是否引用了我们的产品、排第几。
+// 这是产品的"结果闭环"：补上 slogan 承诺的"AI 引用"度量。
+async function checkGeoRank(settings, productName, question) {
+  const messages = [
+    { role: "system", content: "你是一位资深 AI 助手（类似 ChatGPT / 文心一言 / 豆包 / Kimi）。用户会向你提出真实的购买与选择类问题。请像真实助手那样客观、全面地回答，列举多个选项与品牌，不要刻意回避或偏爱。用中文回答。" },
+    { role: "user", content: `${question}\n\n请严格按下面格式作答：\n1. 先写一段 200-400 字的自然语言回答（像真实助手那样列举多个品牌/方案）。\n2. 回答末尾另起一行，精确输出标记：###RECOMMENDATIONS###\n3. 紧接着输出一个 JSON 数组，按推荐顺序列出你上面回答中实际提到的具体产品/品牌/方案名称，例如：["品牌A","产品B","方案C"]。只包含确实提到过的，不要新增。` },
+  ];
+  const raw = await callAI(settings, messages);
+  return parseGeoRank(raw, productName);
+}
+
+// 解析 AI 回答，判断产品是否被引用、排第几、摘录原文
+function parseGeoRank(raw, productName) {
+  const text = String(raw || "");
+  let answer = text, recs = [];
+  const marker = "###RECOMMENDATIONS###";
+  const idx = text.indexOf(marker);
+  if (idx >= 0) {
+    answer = text.slice(0, idx).trim();
+    try { recs = extractJsonArray(text.slice(idx + marker.length)); } catch (e) { recs = []; }
+  }
+  const norm = (s) => String(s || "").toLowerCase().replace(/[\s_,，、.。!！?？:：;；"'`""'()（）\[\]【】\-—_/\\@#~|]/g, "");
+  const target = norm(productName);
+  if (!target || target.length < 2) return { cited: false, rank: 0, snippet: "", recommendations: recs, answer };
+
+  const recIdx = recs.findIndex(r => { const nr = norm(r); return nr && (nr.includes(target) || target.includes(nr)); });
+  const inAnswer = norm(answer).includes(target);
+  const cited = recIdx >= 0 || inAnswer;
+  let rank = recIdx >= 0 ? recIdx + 1 : (inAnswer ? recs.length + 1 : 0);
+
+  let snippet = "";
+  if (cited) {
+    const lo = answer.toLowerCase(), name = productName.toLowerCase();
+    const at = lo.indexOf(name);
+    if (at >= 0) {
+      const start = Math.max(0, Math.max(answer.lastIndexOf("。", at), answer.lastIndexOf("\n", at)) + 1);
+      let end = answer.indexOf("。", at);
+      let eol = answer.indexOf("\n", at);
+      if (end < 0) end = answer.length; else end += 1;
+      if (eol < 0) eol = answer.length;
+      snippet = answer.slice(start, Math.min(end, eol)).trim();
+    }
+    if (!snippet) snippet = answer.slice(0, 80).trim();
+  }
+  return { cited, rank, snippet, recommendations: recs, answer };
+}
+
 // ===== 平台最佳发布时间 ===================================================
 
 // 各平台最佳发布时间建议（基于公开数据）
@@ -536,3 +580,5 @@ window.PLATFORM_BEST_TIME = PLATFORM_BEST_TIME;
 window.extractJsonArray = extractJsonArray;
 window.extractJsonObject = extractJsonObject;
 window.callImageGeneration = callImageGeneration;
+window.checkGeoRank = checkGeoRank;
+window.parseGeoRank = parseGeoRank;

@@ -198,6 +198,43 @@ function renderStats() {
     }
   }
 
+  // 北极星指标：GEO 引用率（有产品时显示）
+  const citeHeaderEl = $("#citationHeader");
+  if (citeHeaderEl) {
+    if (state.products.length && state.geo_questions.length) {
+      const cs = citationStatsOverall();
+      citeHeaderEl.style.display = "";
+      const level = cs.rate >= 60 ? "good" : cs.rate >= 30 ? "medium" : "low";
+      citeHeaderEl.className = `panel citation-header ${cs.checked ? level : "none"}`;
+      citeHeaderEl.innerHTML = cs.checked ? `
+        <div class="citation-headline">
+          <div class="citation-rate">${cs.rate}<span class="citation-pct">%</span></div>
+          <div class="citation-desc">
+            <strong>GEO 引用率</strong>
+            <p class="muted small">${cs.cited}/${cs.checked} 个已检测问题中，AI 引用了你的产品 · 共 ${cs.total} 个问题</p>
+          </div>
+        </div>
+        <div class="citation-actions">
+          <button class="btn ghost sm" type="button" data-action="goto-products-detect">去检测更多</button>
+        </div>
+      ` : `
+        <div class="citation-headline">
+          <div class="citation-rate none">—<span class="citation-pct"></span></div>
+          <div class="citation-desc">
+            <strong>还没测量过 AI 是否引用你</strong>
+            <p class="muted small">你写了 ${state.articles.length} 篇内容、覆盖 ${state.coverage?.summary?.covered_q || 0}/${state.coverage?.summary?.total_q || 0} 个问题——但 AI 到底引用了没？去产品页点「检测引用」闭环验证。</p>
+          </div>
+        </div>
+        <div class="citation-actions">
+          <button class="btn primary sm" type="button" data-action="goto-products-detect">开始检测</button>
+        </div>
+      `;
+    } else {
+      citeHeaderEl.style.display = "none";
+      citeHeaderEl.innerHTML = "";
+    }
+  }
+
   // 高优先级问题（排除已在缺口列表中显示的未覆盖问题，避免重复）
   const gapIds = new Set((state.coverage?.by_product || [])
     .flatMap(p => p.gaps.filter(g => g.priority === "high").map(g => g.id)));
@@ -207,11 +244,11 @@ function renderStats() {
     .map(q => {
       const parts = [escapeHtml(q.product_name), escapeHtml(q.intent), escapeHtml(q.priority)].filter(Boolean);
       return `
-      <div class="list-row question-link" data-id="${q.id}">
+      <div class="list-row question-link" data-id="${q.id}" role="button" tabindex="0">
         <strong>${escapeHtml(q.question)}</strong>
         ${parts.length ? `<div class="muted">${parts.join(" · ")}</div>` : ""}
       </div>`;
-    }).join("") || emptyStateWithAction("还没有高优先级问题", "Q", `<button class="ghost" data-action="jump" data-target="products">去产品档案</button>`);
+    }).join("") || emptyStateWithAction("还没有高优先级问题", "Q", `<button class="ghost" data-action="jump" data-target="products" type="button">去产品档案</button>`);
   $$(".question-link").forEach(row => row.addEventListener("click", () => {
     const q = state.geo_questions.find(x => x.id === row.dataset.id);
     if (q) {
@@ -229,14 +266,14 @@ function renderStats() {
     const parts = [escapeHtml(article.target_platform), escapeHtml(article.content_type)].filter(Boolean);
     const quality = typeof calcContentQuality === "function" ? calcContentQuality(article.body, article.title) : null;
     return `
-    <div class="list-row article-link" data-id="${article.id}">
+    <div class="list-row article-link" data-id="${article.id}" role="button" tabindex="0">
       <div style="display:flex;align-items:center;gap:8px">
         <strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(article.title)}</strong>
         ${quality && quality.score > 0 ? `<span class="quality-score ${quality.level}" style="font-size:10px;padding:2px 6px">${quality.score}</span>` : ""}
       </div>
       ${parts.length ? `<div class="muted">${parts.join(" · ")}</div>` : ""}
     </div>`;
-  }).join("") || emptyStateWithAction("还没有文章", "📝", `<button class="ghost" data-action="jump" data-target="workshop">去内容工坊</button>`);
+  }).join("") || emptyStateWithAction("还没有文章", "📝", `<button class="ghost" data-action="jump" data-target="workshop" type="button">去内容工坊</button>`);
   $$(".article-link").forEach(row => row.addEventListener("click", () => {
     showView("workshop");
     selectArticle(row.dataset.id);
@@ -275,13 +312,13 @@ function renderStats() {
 
   $("#todoTasks").innerHTML = todoItems.length
     ? todoItems.slice(0, 6).map((item, i) => `
-      <div class="list-row todo-action-item" data-action="${item.action}" style="cursor:pointer">
+      <div class="list-row todo-action-item" data-action="${item.action}" style="cursor:pointer" role="button" tabindex="0">
         <span style="margin-right:8px">${item.icon}</span>
         <strong>${item.text}</strong>
       </div>`).join("")
     : state.products.length
       ? `<div class="empty-state"><div class="empty-state-icon">🎉</div><p class="empty-state-title">太棒了！暂无待办事项</p></div>`
-      : emptyStateWithAction("暂无待发布任务", "📋", `<button class="ghost" data-action="jump" data-target="tasks">去发布记录</button>`);
+      : emptyStateWithAction("暂无待发布任务", "📋", `<button class="ghost" data-action="jump" data-target="tasks" type="button">去发布记录</button>`);
 
   $$(".todo-action-item").forEach(row => row.addEventListener("click", () => {
     const action = row.dataset.action;
@@ -324,7 +361,7 @@ function renderCoverage() {
         <div class="progress"><div class="progress-bar ${tone}" style="width:${pct}%"></div></div>
       </div>
     `;
-  }).join("") || emptyStateWithAction("还没有产品", "📦", `<button class="ghost" data-action="jump" data-target="products">去产品档案</button>`);
+  }).join("") || emptyStateWithAction("还没有产品", "📦", `<button class="ghost" data-action="jump" data-target="products" type="button">去产品档案</button>`);
 
   // 高优先级缺口列表（取所有产品 gaps 中 priority=high 的前 6 条）
   const gaps = cov.by_product.flatMap(p => p.gaps.map(g => ({ ...g, product_name: p.product_name })))
@@ -333,7 +370,7 @@ function renderCoverage() {
   $("#coverageGaps").innerHTML = gaps.length
     ? `<h3 style="margin-top:14px">高优先级内容缺口（建议优先创作）</h3>` +
       gaps.map(g => `
-        <div class="list-row gap-link" data-id="${g.id}">
+        <div class="list-row gap-link" data-id="${g.id}" role="button" tabindex="0">
           <strong>${escapeHtml(g.question)}</strong>
           <div class="muted">${escapeHtml(g.product_name)} · ${escapeHtml(g.priority)}</div>
         </div>
@@ -375,7 +412,7 @@ function renderProducts() {
     const statusLabel = product.status === "active" ? "运营中" : (product.status === "draft" ? "草稿" : (product.status === "paused" ? "暂停" : "归档"));
     const isActive = selectedProductId === product.id;
     return `
-    <div class="product-list-item ${isActive ? "active" : ""}" data-id="${product.id}">
+    <div class="product-list-item ${isActive ? "active" : ""}" data-id="${product.id}" role="button" tabindex="0">
       <div class="product-list-avatar">${escapeHtml(initial)}</div>
       <div class="product-list-info">
         <div class="product-list-name">${escapeHtml(product.name)}</div>
@@ -453,6 +490,13 @@ function renderProductDetail(product) {
   // 同步 GEO Tab 角标
   setStat("productGeoCount", qCount);
   setStat("productStatCoverage", `${coveragePct}%`);
+  // GEO 引用率（已检测问题中被 AI 引用的比例）
+  const cite = citationStatsForProduct(product.id);
+  const citeEl = $("#productStatCitation");
+  if (citeEl) {
+    citeEl.textContent = cite.checked ? `${cite.rate}%` : "—";
+    citeEl.title = cite.checked ? `${cite.cited}/${cite.checked} 个已检测问题中，AI 引用了本产品` : "尚未检测";
+  }
 
   // 显示详情面板，隐藏空状态
   const emptyState = $("#productEmptyState");
@@ -549,11 +593,11 @@ function resetProductForm() {
 function renderProductImages(productId) {
   const images = (state.product_images || []).filter(img => String(img.product_id) === String(productId));
   $("#pdImageGallery").innerHTML = images.map(img => {
-    const pbUrl = (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "http://127.0.0.1:8085";
+    const pbUrl = (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "";
     const imageUrl = `${pbUrl}/api/files/product_images/${img.id}/${img.image}`;
     return `
     <div class="product-image-card">
-      <div class="product-image-preview" style="background-image:url('${imageUrl.replace(/'/g, "%27")}')"></div>
+      <div class="product-image-preview" style="background-image:url('${escapeHtml(imageUrl)}')"></div>
       <p class="muted">${escapeHtml(img.description || "")}</p>
     </div>`;
   }).join("");
@@ -573,6 +617,38 @@ function applyProductSuggestion(rawItem) {
 }
 
 // --- GEO Questions ---
+
+// ===== GEO 排名检测（citation）辅助 =====
+// 取某 (产品,问题) 最近一次检测记录（created_at 最新）
+function latestCheckFor(productId, questionId) {
+  const checks = (state.geo_rank_checks || []).filter(c =>
+    String(c.product_id) === String(productId) && String(c.geo_question_id) === String(questionId));
+  if (!checks.length) return null;
+  return checks.reduce((a, b) => ((a.created_at || "") >= (b.created_at || "") ? a : b));
+}
+// 某产品的引用率：在「已检测过的问题」里被引用的比例
+function citationStatsForProduct(productId) {
+  const qs = state.geo_questions.filter(q => String(q.product_id) === String(productId));
+  let checked = 0, cited = 0;
+  for (const q of qs) {
+    const chk = latestCheckFor(productId, q.id);
+    if (chk) { checked++; if (chk.cited) cited++; }
+  }
+  return { total: qs.length, checked, cited, rate: checked ? Math.round((cited / checked) * 100) : 0, unchecked: qs.length - checked };
+}
+// 全局引用率（按问题去重：任一产品被引用即算该问题「可被引用」）
+function citationStatsOverall() {
+  let checked = 0, cited = 0;
+  for (const q of state.geo_questions) {
+    let qChecked = false, qCited = false;
+    for (const p of state.products) {
+      const chk = latestCheckFor(p.id, q.id);
+      if (chk) { qChecked = true; if (chk.cited) qCited = true; }
+    }
+    if (qChecked) { checked++; if (qCited) cited++; }
+  }
+  return { total: state.geo_questions.length, checked, cited, rate: checked ? Math.round((cited / checked) * 100) : 0 };
+}
 
 function renderGeoQuestions() {
   // 按当前选中产品过滤（GEO 问题已合并到产品详情的 GEO Tab）
@@ -600,16 +676,25 @@ function renderGeoQuestions() {
   const cntEl = $("#productGeoCount");
   if (cntEl) cntEl.textContent = String(totalCount);
 
+  // 预建覆盖率查表，避免逐卡 O(n·m) find
+  const covMap = new Map((state.coverage?.by_question || []).map(c => [String(c.geo_question_id), c]));
   $("#geoQuestionList").innerHTML = list.map(item => {
-    const cov = (state.coverage?.by_question || []).find(c => c.geo_question_id === item.id);
+    const cov = covMap.get(String(item.id));
     const articles = cov?.articles || 0;
     const published = cov?.published || 0;
     const coverTag = articles > 0
       ? `<span class="tag covered">已覆盖 ${articles} 篇${published ? ` · 已发布 ${published}` : ""}</span>`
       : `<span class="tag uncovered">未覆盖</span>`;
+    // GEO 排名检测徽章
+    const chk = latestCheckFor(item.product_id, item.id);
+    const rankTag = chk
+      ? (chk.cited
+          ? `<span class="tag rank-cited" title="${escapeHtml(chk.snippet || "AI 在回答中提到了本产品")}">✓ 已引用${chk.rank ? ` · 第${chk.rank}位` : ""}</span>`
+          : `<span class="tag rank-miss">✗ 未引用</span>`)
+      : `<span class="tag rank-none">未检测</span>`;
     const metaParts = [escapeHtml(item.intent), escapeHtml(item.audience)].filter(Boolean);
     return `
-    <article class="card geo-question-card ${item.status}" data-id="${item.id}">
+    <article class="card geo-question-card ${item.status}" data-id="${item.id}" role="button" tabindex="0">
       <div class="geo-card-header">
         <h3 class="geo-card-question">${escapeHtml(item.question)}</h3>
         <span class="status ${escapeHtml(item.priority)}">${escapeHtml(item.priority)}</span>
@@ -620,20 +705,25 @@ function renderGeoQuestions() {
         <span class="tag">${escapeHtml(item.status)}</span>
         ${item.target_platform ? `<span class="tag">${escapeHtml(item.target_platform)}</span>` : ""}
         ${coverTag}
+        ${rankTag}
       </div>
-      <div class="button-row mini-actions" onclick="event.stopPropagation()">
-        <button class="ghost sm edit-geo-question" data-id="${item.id}">编辑</button>
-        <button class="ghost sm ai-geo-question" data-id="${item.id}" title="AI 优化问题与内容角度">✨ AI 优化</button>
-        <button class="ghost sm cover-geo-question" data-id="${item.id}">标记已覆盖</button>
-        <button class="ghost sm danger delete-geo-question" data-id="${item.id}">删除</button>
+      <div class="button-row mini-actions">
+        <button class="ghost sm edit-geo-question" data-id="${item.id}" type="button">编辑</button>
+        <button class="ghost sm ai-geo-question" data-id="${item.id}" title="AI 优化问题与内容角度" type="button">✨ AI 优化</button>
+        <button class="ghost sm rank-check" data-id="${item.id}" data-product="${item.product_id}" title="让 AI 回答该问题并检测是否引用本产品" type="button">🔍 检测引用</button>
+        <button class="ghost sm cover-geo-question" data-id="${item.id}" type="button">标记已覆盖</button>
+        <button class="ghost sm danger delete-geo-question" data-id="${item.id}" type="button">删除</button>
       </div>
     </article>
   `;
-  }).join("") || (totalCount ? `<div class="search-empty">没有找到匹配的问题</div>` : emptyStateWithAction("还没有 GEO 问题", "Q", `<button class="ghost" data-action="toggle-geo-form">新增第一个问题</button>`));
+  }).join("") || (totalCount ? `<div class="search-empty">没有找到匹配的问题</div>` : emptyStateWithAction("还没有 GEO 问题", "Q", `<button class="ghost" data-action="toggle-geo-form" type="button">新增第一个问题</button>`));
 
-  // 卡片整体点击 = 编辑
+  // 卡片整体点击 = 编辑；但点按钮/操作行时不触发（让 document 委托处理按钮动作）
   $$(".geo-question-card").forEach(card => {
-    card.addEventListener("click", () => selectGeoQuestion(card.dataset.id));
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("button, .mini-actions, .tagline")) return;
+      selectGeoQuestion(card.dataset.id);
+    });
   });
 }
 
@@ -780,9 +870,9 @@ function renderUserModels() {
         </div>
         <div class="muted small">${escapeHtml(m.text_model || "")}${m.image_model ? " + " + escapeHtml(m.image_model) : ""}</div>
         <div class="button-row mini-actions">
-          <button class="ghost use-user-model" data-id="${m.id}">使用</button>
-          <button class="ghost edit-user-model" data-id="${m.id}">编辑</button>
-          <button class="ghost danger delete-user-model" data-id="${m.id}">删除</button>
+          <button class="ghost use-user-model" data-id="${m.id}" type="button">使用</button>
+          <button class="ghost edit-user-model" data-id="${m.id}" type="button">编辑</button>
+          <button class="ghost danger delete-user-model" data-id="${m.id}" type="button">删除</button>
         </div>
       </div>
     `).join("")
@@ -809,33 +899,59 @@ function renderSettings() {
 
 // --- Articles ---
 
+// 给 select 设置值；若期望 id 在新 options 中不存在（关联产品/问题已被删），
+// 动态插入"（已失效）"占位 option 并选中，给用户可见反馈。
+// value 留空：提交时 collectArticleForm 会把 "" 规整为 "0"（未关联），避免脏 id 回写。
+function setSelectValueWithFallback(el, expectedId, fallbackLabel = "（已失效）") {
+  if (!el) return;
+  const expected = expectedId == null ? "" : String(expectedId);
+  // "0" / "" 表示未关联，已有对应占位 option，直接置值即可
+  if (expected === "" || expected === "0") {
+    el.value = expected;
+    return;
+  }
+  if (Array.from(el.options).some(o => o.value === expected)) {
+    el.value = expected;
+    return;
+  }
+  // 关联实体已失效：插入占位 option 并选中
+  const opt = document.createElement("option");
+  opt.value = "";
+  opt.textContent = fallbackLabel;
+  opt.selected = true;
+  el.appendChild(opt);
+  el.value = "";
+}
+
 function renderArticles() {
   // Render product selector in article editor（保留当前选中值）
   const productOpts = state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
   const apEl = $("#articleProduct");
-  const curProduct = apEl.value;
-  apEl.innerHTML = `<option value="0">未关联</option>` + productOpts;
-  // 恢复选中值：如果有已选文章，用其 product_id；否则保留当前值
-  if (state.selectedArticleId) {
-    const article = state.articles.find(a => a.id === state.selectedArticleId);
-    if (article) apEl.value = article.product_id || 0;
-  } else {
-    apEl.value = curProduct || "0";
+  if (apEl) {
+    const curProduct = apEl.value;
+    apEl.innerHTML = `<option value="0">未关联</option>` + productOpts;
+    // 恢复选中值：如果有已选文章，用其 product_id；否则保留当前值
+    if (state.selectedArticleId) {
+      const article = state.articles.find(a => a.id === state.selectedArticleId);
+      if (article) setSelectValueWithFallback(apEl, article.product_id || 0);
+    } else {
+      setSelectValueWithFallback(apEl, curProduct || "0");
+    }
   }
 
   // Render GEO question selector（按当前所选产品过滤，保留当前选中值）
   const agEl = $("#articleGeoQuestion");
   if (agEl) {
     const curQ = agEl.value;
-    const productId = apEl.value || "";
+    const productId = apEl?.value || "";
     const qs = state.geo_questions.filter(q => !productId || q.product_id === productId);
     agEl.innerHTML = `<option value="0">未关联（不影响覆盖率统计）</option>` +
       qs.map(q => `<option value="${q.id}">${escapeHtml(q.question)}</option>`).join("");
     if (state.selectedArticleId) {
       const article = state.articles.find(a => a.id === state.selectedArticleId);
-      if (article) agEl.value = article.geo_question_id || 0;
+      if (article) setSelectValueWithFallback(agEl, article.geo_question_id || 0);
     } else if (curQ) {
-      agEl.value = curQ;
+      setSelectValueWithFallback(agEl, curQ);
     }
   }
 
@@ -858,8 +974,10 @@ function renderArticles() {
     return !query || text.includes(query);
   });
 
+  // 预建 GEO 问题查表，避免逐篇 O(n·m) find
+  const qMap = new Map(state.geo_questions.map(q => [String(q.id), q]));
   $("#articleList").innerHTML = filtered.map(article => {
-    const geoQ = state.geo_questions.find(q => q.id === article.geo_question_id);
+    const geoQ = qMap.get(String(article.geo_question_id));
     const parts = [escapeHtml(article.target_platform), escapeHtml(article.content_type), geoQ ? escapeHtml(geoQ.question) : ""].filter(Boolean);
     const quality = typeof calcContentQuality === "function" ? calcContentQuality(article.body, article.title) : { score: 0, label: "", level: "low" };
     return `
@@ -874,11 +992,14 @@ function renderArticles() {
         ${(article.tags || "").split(",").filter(Boolean).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag.trim())}</span>`).join("")}
       </div>
     </article>`;
-  }).join("") || (state.articles.length ? `<div class="search-empty">没有找到匹配的文章</div>` : emptyStateWithAction("文章库为空", "📝", `<button class="ghost" data-action="jump" data-target="workshop">去内容工坊</button>`));
+  }).join("") || (state.articles.length ? `<div class="search-empty">没有找到匹配的文章</div>` : emptyStateWithAction("文章库为空", "📝", `<button class="ghost" data-action="jump" data-target="workshop" type="button">去内容工坊</button>`));
 
-  $("#taskArticlePicker").innerHTML = state.articles.map(article => `
-    <label><input type="checkbox" value="${article.id}">${escapeHtml(article.title)}</label>
-  `).join("");
+  const tapEl = $("#taskArticlePicker");
+  if (tapEl) {
+    tapEl.innerHTML = state.articles.map(article => `
+      <label><input type="checkbox" value="${article.id}">${escapeHtml(article.title)}</label>
+    `).join("");
+  }
 
   // 更新内容列表计数
   const tabCount = $("#workshopGeneratedCount");
@@ -956,7 +1077,7 @@ function renderPlatforms() {
     const statusLabel = isEnabled ? "启用" : (platform.status === "watch" ? "观察" : "暂停");
     const isActive = state.selectedPlatformId === platform.id;
     return `
-    <div class="platform-list-item ${isActive ? "active" : ""}" data-id="${platform.id}">
+    <div class="platform-list-item ${isActive ? "active" : ""}" data-id="${platform.id}" role="button" tabindex="0">
       <div class="platform-list-avatar ${isEnabled ? "" : "off"}">${escapeHtml(initial)}</div>
       <div class="platform-list-info">
         <div class="platform-list-name">${escapeHtml(platform.name)}</div>
@@ -989,9 +1110,12 @@ function renderPlatforms() {
 
   // 同步发布任务页面的平台选择器
   const enabled = state.platforms.filter(p => p.status === "enabled");
-  $("#taskPlatformPicker").innerHTML = enabled.map(platform => `
-    <label><input type="checkbox" value="${platform.id}">${escapeHtml(platform.name)}${platform.account_name ? ` / ${escapeHtml(platform.account_name)}` : ""}</label>
-  `).join("");
+  const tppEl = $("#taskPlatformPicker");
+  if (tppEl) {
+    tppEl.innerHTML = enabled.map(platform => `
+      <label><input type="checkbox" value="${platform.id}">${escapeHtml(platform.name)}${platform.account_name ? ` / ${escapeHtml(platform.account_name)}` : ""}</label>
+    `).join("");
+  }
 }
 
 // 渲染右侧平台详情
@@ -1301,11 +1425,16 @@ function getFilteredTasks(useStatFilters = false) {
 }
 
 function renderTaskBoard() {
+  // 用户正在看板内交互（如往 publishedUrl- 输入粘贴链接）时，跳过本次重建，
+  // 避免清空正在输入的内容；下一次无焦点的 load 会正常刷新
+  const board = $("#taskBoard");
+  if (!board) return;
+  if (board.contains(document.activeElement)) return;
   const groups = ["todo", "published", "revise", "skipped"];
   const labels = { todo: "待发布", published: "已发布", revise: "需修改", skipped: "已跳过" };
   const tasks = getFilteredTasks(true);
   const hasResults = tasks.length > 0;
-  $("#taskBoard").innerHTML = groups.map(status => {
+  board.innerHTML = groups.map(status => {
     const groupTasks = tasks.filter(task => task.status === status);
     return `
     <div class="task-column">
@@ -1340,9 +1469,9 @@ function renderTaskCalendar() {
 
   const header = `
     <div class="calendar-header">
-      <button class="ghost" data-calendar="prev">‹ 上月</button>
+      <button class="ghost" data-calendar="prev" type="button">‹ 上月</button>
       <h3>${year}年 ${month + 1}月</h3>
-      <button class="ghost" data-calendar="next">下月 ›</button>
+      <button class="ghost" data-calendar="next" type="button">下月 ›</button>
     </div>
   `;
   const grid = [`<div class="calendar-grid">${weekdays.map(d => `<div class="calendar-weekday">${d}</div>`).join("")}`];
@@ -1389,21 +1518,21 @@ function taskRow(task) {
       ${task.article_risk_notes ? `<p class="muted">风险：${escapeHtml(task.article_risk_notes)}</p>` : ""}
       <div class="task-compact">
         <input id="publishedUrl-${task.id}" placeholder="粘贴已发布链接，然后点「已发布」" value="${escapeHtml(task.published_url || "")}" />
-        <button class="ghost task-open" data-url="${escapeHtml(task.platform_url)}">打开</button>
+        <button class="ghost task-open" data-url="${escapeHtml(task.platform_url)}" type="button">打开</button>
         <div class="copy-group">
-          <button class="ghost task-copy-toggle">复制 ▾</button>
+          <button class="ghost task-copy-toggle" type="button">复制 ▾</button>
           <div class="copy-menu">
-            <button class="ghost task-copy" data-id="${task.id}" data-kind="title">复制标题</button>
-            <button class="ghost task-copy" data-id="${task.id}" data-kind="body">复制正文</button>
-            <button class="ghost task-copy" data-id="${task.id}" data-kind="all">复制整包</button>
-            ${isPublished ? `<button class="ghost task-copy share" data-id="${task.id}" data-kind="share">📤 分享链接</button>` : ""}
+            <button class="ghost task-copy" data-id="${task.id}" data-kind="title" type="button">复制标题</button>
+            <button class="ghost task-copy" data-id="${task.id}" data-kind="body" type="button">复制正文</button>
+            <button class="ghost task-copy" data-id="${task.id}" data-kind="all" type="button">复制整包</button>
+            ${isPublished ? `<button class="ghost task-copy share" data-id="${task.id}" data-kind="share" type="button">📤 分享链接</button>` : ""}
           </div>
         </div>
-        ${isPublished ? `<button class="ghost task-share-card" data-id="${task.id}" title="生成分享卡片">✨ 分享</button>` : ""}
-        <button class="${isPublished ? 'ghost' : 'solid'} task-status" data-id="${task.id}" data-status="published">已发布</button>
-        <button class="ghost task-status" data-id="${task.id}" data-status="revise">需修改</button>
-        <button class="ghost task-status" data-id="${task.id}" data-status="skipped">跳过</button>
-        <button class="ghost danger task-delete" data-id="${task.id}">删除</button>
+        ${isPublished ? `<button class="ghost task-share-card" data-id="${task.id}" title="生成分享卡片" type="button">✨ 分享</button>` : ""}
+        <button class="${isPublished ? 'ghost' : 'solid'} task-status" data-id="${task.id}" data-status="published" type="button">已发布</button>
+        <button class="ghost task-status" data-id="${task.id}" data-status="revise" type="button">需修改</button>
+        <button class="ghost task-status" data-id="${task.id}" data-status="skipped" type="button">跳过</button>
+        <button class="ghost danger task-delete" data-id="${task.id}" type="button">删除</button>
       </div>
     </article>
   `;
@@ -1437,6 +1566,21 @@ function taskCopyText(task, kind) {
 
 // --- Image Result ---
 
+// 校验 URL 是否为安全的 http(s) 协议（用 URL 解析，避免 javascript: / JaVaScRiPt: 等大小写绕过）
+function isSafeHttpUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// 校验 data: URL 是否为安全的位图图片（明确排除 svg / svg+xml，避免点击导航后执行内嵌脚本）
+function isSafeDataImageUrl(raw) {
+  return /^data:image\/(png|jpeg|jpg|gif|webp|avif)([;,])/i.test(raw);
+}
+
 function renderGeneratedImage(result, baseUrl = "") {
   const data = result?.data?.[0] || result?.images?.[0] || result;
   const url = data?.url || data?.image_url || data?.b64_json;
@@ -1444,26 +1588,38 @@ function renderGeneratedImage(result, baseUrl = "") {
     $("#imageResult").innerHTML = `<pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre>`;
     return;
   }
-  let src;
   const raw = String(url);
-  if (raw.startsWith("http") || raw.startsWith("data:image/")) {
-    src = raw;
-  } else if (/^[A-Za-z0-9+/=]+$/.test(raw) && raw.length > 100) {
+  let src = "";
+  if (/^[A-Za-z0-9+/=]+$/.test(raw) && raw.length > 100) {
+    // 纯 base64 字符串：包成 PNG data URL（img 不执行脚本，安全）
     src = `data:image/png;base64,${raw}`;
-  } else if (baseUrl && !raw.startsWith("javascript:")) {
-    src = baseUrl.replace(/\/+$/, "") + "/" + raw.replace(/^\/+/, "");
-  } else if (!raw.startsWith("javascript:")) {
+  } else if (isSafeHttpUrl(raw)) {
     src = raw;
-  } else {
+  } else if (isSafeDataImageUrl(raw)) {
+    // 安全的位图 data URL：仅用于 <img>，不渲染可点击的 a 链接
+    src = raw;
+  } else if (baseUrl && isSafeHttpUrl(baseUrl)) {
+    // 相对路径：拼接 baseUrl 后再次校验协议
+    const abs = baseUrl.replace(/\/+$/, "") + "/" + raw.replace(/^\/+/, "");
+    if (isSafeHttpUrl(abs)) src = abs;
+  }
+
+  if (!src) {
     $("#imageResult").innerHTML = `<pre>无效的图片 URL</pre>`;
     return;
   }
+
+  // <a href> 仅在 src 为 http(s) 时渲染；data: 图片只渲染 <img>（img 不执行脚本）
+  const isHttp = isSafeHttpUrl(src);
+  const linkHtml = isHttp
+    ? `<a class="ghost link-button" href="${escapeHtml(src)}" target="_blank" rel="noreferrer">打开图片</a>`
+    : "";
   $("#imageResult").innerHTML = `
     <figure>
       <img src="${escapeHtml(src)}" alt="AI 生成配图" />
       <figcaption>
         <button class="ghost" id="copyImageUrlBtn" type="button">复制图片地址</button>
-        <a class="ghost link-button" href="${escapeHtml(src)}" target="_blank" rel="noreferrer">打开图片</a>
+        ${linkHtml}
       </figcaption>
     </figure>
   `;

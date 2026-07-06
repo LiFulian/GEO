@@ -1,5 +1,17 @@
 /* GEO Studio - Event binding with event delegation */
 
+// 搜索索引缓存（模块级，便于 state.js 在 load() 后通过全局 clearSearchIndexCache 清除）
+let _searchIndexCache = null;
+let _searchIndexCacheKey = null;
+
+// 清除搜索索引缓存（在 load() 后调用）
+// 注意：必须位于 bindEvents() 外的顶层作用域，否则 state.js 的
+// typeof clearSearchIndexCache === "function" 判定为 false，索引永不刷新
+function clearSearchIndexCache() {
+  _searchIndexCache = null;
+  _searchIndexCacheKey = null;
+}
+
 function bindEvents() {
   // --- Auth ---
   renderAuthView();
@@ -187,6 +199,9 @@ function bindEvents() {
   // --- Products ---
   $("#productForm").addEventListener("submit", async event => {
     event.preventDefault();
+    const btn = event.submitter || $("#saveProductBtn");
+    if (btn && isLoading(btn)) return;
+    if (btn) setLoading(btn, true);
     try {
       const payload = formData(event.target);
       const id = payload.id;
@@ -206,6 +221,8 @@ function bindEvents() {
       }
     } catch (e) {
       toast("保存失败：" + e.message, "error");
+    } finally {
+      if (btn) setLoading(btn, false);
     }
   });
 
@@ -324,7 +341,7 @@ function bindEvents() {
         form.append("image", file);
         form.append("product_id", productId);
         form.append("user_id", getCurrentUserId());
-        const pbUrl = (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "http://127.0.0.1:8085";
+        const pbUrl = (window.__GEO_CONFIG__ && window.__GEO_CONFIG__.pbUrl) || "";
         try {
           const token = await apiAuth();
           const res = await fetch(`${pbUrl}/api/collections/product_images/records`, {
@@ -387,7 +404,7 @@ function bindEvents() {
 
   $("#productAiApplyBtn").addEventListener("click", () => {
     try {
-      applyProductSuggestion(parseJsonObjectText($("#productAiResult").value));
+      applyProductSuggestion(extractJsonObject($("#productAiResult").value));
       toast("已应用到产品表单", "success");
     } catch (error) {
       toast(error.message, "error");
@@ -412,6 +429,15 @@ function bindEvents() {
     $("#geoQuestionForm").style.display = "";
     $("#geoQuestionText")?.focus();
   });
+  $("#pdGeoCheckAllBtn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const productId = ($("#pdId")?.value) || selectedProductId;
+    if (!productId) { toast("请先选择产品", "error"); return; }
+    if (isLoading(btn)) return;
+    setLoading(btn, true);
+    try { await doRankCheckBatch(productId); }
+    finally { setLoading(btn, false); }
+  });
   $("#cancelGeoQuestionBtn")?.addEventListener("click", () => {
     $("#geoQuestionForm").style.display = "none";
     resetGeoQuestionForm();
@@ -419,6 +445,9 @@ function bindEvents() {
 
   $("#geoQuestionForm").addEventListener("submit", async event => {
     event.preventDefault();
+    const btn = event.submitter || event.target.querySelector('button[type="submit"]');
+    if (btn && isLoading(btn)) return;
+    if (btn) setLoading(btn, true);
     try {
       const id = $("#geoQuestionId").value;
       const payload = {
@@ -443,6 +472,8 @@ function bindEvents() {
       await load();
     } catch (e) {
       toast("保存失败：" + e.message, "error");
+    } finally {
+      if (btn) setLoading(btn, false);
     }
   });
   $("#resetGeoQuestionBtn").addEventListener("click", () => {
@@ -472,33 +503,38 @@ function bindEvents() {
     if (!productId) return toast("请先保存产品", "error");
     const raw = $("#geoImportBox").value;
     if (!raw.trim()) return toast("请先粘贴 AI 返回的 JSON", "error");
-    let parsed, imported = 0, skipped = 0;
+    let parsed, imported = 0, skipped = 0, failed = 0;
     try {
-      parsed = extractJsonArray(raw);
+      parsed = extractJsonArray(raw).filter(i => i && typeof i === "object");
     } catch (err) {
       return toast("JSON 格式错误：" + err.message, "error");
     }
     for (const item of parsed) {
       const question = (item.question || item["问题"] || "").trim();
       if (!question) { skipped++; continue; }
-      await api("/api/geo_questions", {
-        method: "POST",
-        body: JSON.stringify({
-          product_id: productId,
-          question,
-          intent: item.intent || item["意图"] || "",
-          audience: item.audience || item["人群"] || "",
-          priority: item.priority || item["优先级"] || "medium",
-          status: "active",
-          content_angle: item.content_angle || item["内容角度"] || "",
-          target_platform: item.target_platform || item["目标平台"] || "",
-        }),
-      });
-      imported++;
+      try {
+        await api("/api/geo_questions", {
+          method: "POST",
+          body: JSON.stringify({
+            product_id: productId,
+            question,
+            intent: item.intent || item["意图"] || "",
+            audience: item.audience || item["人群"] || "",
+            priority: item.priority || item["优先级"] || "medium",
+            status: "active",
+            content_angle: item.content_angle || item["内容角度"] || "",
+            target_platform: item.target_platform || item["目标平台"] || "",
+          }),
+        });
+        imported++;
+      } catch (e) {
+        failed++;
+        console.warn("GEO 问题导入失败：", question, e.message);
+      }
     }
     $("#geoImportBox").value = "";
-    toast(`已导入 ${imported} 个 GEO 问题${skipped ? "，" + skipped + " 条跳过" : ""}`, "success");
     await load();
+    toast(`导入完成：成功 ${imported} 条，失败 ${failed} 条${skipped ? `，${skipped} 条跳过` : ""}`, failed ? "default" : "success");
   });
 
   // --- 文章导入 ---
@@ -510,7 +546,7 @@ function bindEvents() {
     const geoQuestionId = ($("#importArticleGeoQuestion")?.value) || "0";
     let parsed, imported = 0, skipped = 0;
     try {
-      parsed = extractJsonArray(raw);
+      parsed = extractJsonArray(raw).filter(i => i && typeof i === "object");
     } catch (err) {
       return toast("JSON 格式错误：" + err.message, "error");
     }
@@ -555,6 +591,9 @@ function bindEvents() {
   });
 
   $("#saveAiBtn").addEventListener("click", async () => {
+    const btn = $("#saveAiBtn");
+    if (isLoading(btn)) return;
+    setLoading(btn, true);
     try {
       // 快速开始：填入 Key 即启用 API 直连
       const hasKey = $("#textKey").value || (state.ai_settings && state.ai_settings.has_text_api_key);
@@ -580,6 +619,8 @@ function bindEvents() {
       await load();
     } catch (e) {
       toast("保存失败：" + e.message, "error");
+    } finally {
+      setLoading(btn, false);
     }
   });
 
@@ -588,6 +629,24 @@ function bindEvents() {
     $("#aiMode").value = "manual";
     toast("已切换到手动 Prompt 模式，点击「保存」生效", "info");
   });
+
+  // 数据导出
+  $("#exportProductsBtn")?.addEventListener("click", () => exportCSV("products", state.products, [
+    { key: "name", label: "产品名称" }, { key: "type", label: "类型" }, { key: "status", label: "状态" },
+    { key: "url", label: "链接" }, { key: "audience", label: "目标用户" }, { key: "selling_points", label: "核心卖点" },
+    { key: "competitors", label: "竞品" }, { key: "created_at", label: "创建时间" },
+  ]));
+  $("#exportArticlesBtn")?.addEventListener("click", () => exportCSV("articles", state.articles, [
+    { key: "title", label: "标题" }, { key: "content_type", label: "类型" }, { key: "target_platform", label: "目标平台" },
+    { key: "status", label: "状态" }, { key: "summary", label: "摘要" }, { key: "keywords", label: "关键词" },
+    { key: "created_at", label: "创建时间" },
+  ]));
+  $("#exportTasksBtn")?.addEventListener("click", () => exportCSV("tasks", state.tasks, [
+    { key: "article_title", label: "文章标题" }, { key: "platform_name", label: "平台" },
+    { key: "status", label: "状态" }, { key: "published_url", label: "发布链接" },
+    { key: "created_at", label: "创建时间" },
+  ]));
+  $("#exportAllBtn")?.addEventListener("click", exportAllJSON);
 
   $("#aiPreset").addEventListener("change", () => {
     const val = $("#aiPreset").value;
@@ -800,7 +859,7 @@ function bindEvents() {
         { role: "user", content: prompt },
       ];
       const raw = await callAI({ ...ai, temperature: 0.7 }, messages);
-      const arr = extractJsonArray(raw);
+      const arr = extractJsonArray(raw).filter(i => i && typeof i === "object");
       if (arr.length === 0) return toast("AI 未返回有效结果", "error");
       // 批量创建文章
       let created = 0;
@@ -859,7 +918,7 @@ function bindEvents() {
       let result;
       try { result = JSON.parse(raw); } catch (_) {
         const m = raw.match(/\{[\s\S]*\}/);
-        if (m) result = JSON.parse(m[0]);
+        if (m) { try { result = JSON.parse(m[0]); } catch (_e) { /* fall through */ } }
       }
       if (!result) {
         toast("AI 返回结果无法解析，请查看控制台", "warning");
@@ -885,7 +944,7 @@ function bindEvents() {
       dlg.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000";
       const box = document.createElement("div");
       box.style.cssText = "background:#fff;border-radius:12px;padding:24px;max-width:560px;width:90%;max-height:80vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)";
-      box.innerHTML = `<h3 style="margin:0 0 12px">SEO 优化分析</h3><pre style="white-space:pre-wrap;font-size:13px;line-height:1.6;color:#334155">${msg.replace(/</g, "&lt;")}</pre><button style="margin-top:16px;padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer" onclick="this.parentElement.parentElement.remove()">关闭</button>`;
+      box.innerHTML = `<h3 style="margin:0 0 12px">SEO 优化分析</h3><pre style="white-space:pre-wrap;font-size:13px;line-height:1.6;color:#334155">${escapeHtml(msg)}</pre><button style="margin-top:16px;padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer" onclick="this.parentElement.parentElement.remove()" type="button">关闭</button>`;
       dlg.appendChild(box);
       dlg.addEventListener("click", e => { if (e.target === dlg) dlg.remove(); });
       document.body.appendChild(dlg);
@@ -952,6 +1011,9 @@ function bindEvents() {
   }));
 
   $("#saveArticleBtn").addEventListener("click", async () => {
+    const btn = $("#saveArticleBtn");
+    if (isLoading(btn)) return;
+    setLoading(btn, true);
     try {
       const id = $("#articleId").value;
       const oldStatus = id ? (state.articles.find(a => a.id === id)?.status || "draft") : "draft";
@@ -997,6 +1059,8 @@ function bindEvents() {
       await load();
     } catch (e) {
       toast("保存失败：" + e.message, "error");
+    } finally {
+      setLoading(btn, false);
     }
   });
 
@@ -1045,6 +1109,7 @@ function bindEvents() {
     }
     if (!prompt) return toast("请先填写配图建议或选择文章", "error");
     if (!state.ai_settings?.image_model) return toast("请先在「AI 设置」中配置图片生成模型", "error");
+    if (!(state.ai_settings?.image_api_key || state.ai_settings?.api_key)) return toast("请先配置图片 API Key", "error");
     setLoading(btn);
     toast("正在生成配图，可能需要几十秒...");
     try {
@@ -1137,6 +1202,9 @@ function bindEvents() {
 
   $("#platformForm").addEventListener("submit", async event => {
     event.preventDefault();
+    const btn = event.submitter || event.target.querySelector('button[type="submit"]');
+    if (btn && isLoading(btn)) return;
+    if (btn) setLoading(btn, true);
     try {
       const id = $("#platformId").value;
       const payload = {
@@ -1167,6 +1235,8 @@ function bindEvents() {
       if (savedId) selectPlatform(savedId);
     } catch (e) {
       toast("保存失败：" + e.message, "error");
+    } finally {
+      if (btn) setLoading(btn, false);
     }
   });
 
@@ -1209,7 +1279,7 @@ function bindEvents() {
   $("#openTaskPlatformBtn")?.addEventListener("click", () => {
     const pid = $("#taskFormPlatform").value;
     const p = state.platforms.find(x => String(x.id) === String(pid));
-    if (p?.url) window.open(p.url, "_blank");
+    if (p?.url) window.open(p.url, "_blank", "noopener,noreferrer");
     else toast("请先选择平台", "error");
   });
   $("#resetTaskBtn")?.addEventListener("click", () => {
@@ -1218,6 +1288,8 @@ function bindEvents() {
     renderTaskForm();
   });
   $("#saveTaskBtn")?.addEventListener("click", async () => {
+    const btn = $("#saveTaskBtn");
+    if (isLoading(btn)) return;
     const articleId = $("#taskFormArticle").value;
     const platformId = $("#taskFormPlatform").value;
     if (!articleId) return toast("请选择发布内容", "error");
@@ -1230,7 +1302,8 @@ function bindEvents() {
       published_url: $("#taskFormUrl").value.trim(),
       notes: $("#taskFormNotes").value.trim(),
     };
-    if (status === "published" && !payload.published_at) payload.published_at = formatLocalNow();
+    if (status === "published") payload.published_at = formatLocalNow();
+    setLoading(btn, true);
     try {
       await api("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
       toast("发布记录已保存", "success");
@@ -1239,14 +1312,14 @@ function bindEvents() {
       await load();
     } catch (e) {
       toast("保存失败：" + e.message, "error");
+    } finally {
+      setLoading(btn, false);
     }
   });
 
   // --- Global Search ---
 let globalSearchIndex = -1;
 let globalSearchResults = [];
-let _searchIndexCache = null;
-let _searchIndexCacheKey = null;
 
 function buildGlobalSearchIndex() {
   // 生成缓存key
@@ -1295,15 +1368,11 @@ function buildGlobalSearchIndex() {
   // 更新缓存
   _searchIndexCache = index;
   _searchIndexCacheKey = cacheKey;
-  
+
   return index;
 }
 
-// 清除搜索索引缓存（在load()后调用）
-function clearSearchIndexCache() {
-  _searchIndexCache = null;
-  _searchIndexCacheKey = null;
-}
+// clearSearchIndexCache 已上移至模块顶层作用域（供 state.js 全局调用）
 
 function performGlobalSearch(query) {
   const q = query.trim().toLowerCase();
@@ -1410,6 +1479,20 @@ function bindGlobalSearchEvents() {
 // --- Event Delegation for Dynamic Content ---
 document.addEventListener("click", handleDelegatedClick);
 
+// 键盘可达性：render.js 把可点击的 <div>/<article> 标记为 role="button" tabindex="0"，
+// 这里让它们在 Enter / Space 时触发 click（BUTTON/A 已原生支持，跳过避免双触发）。
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const clickable = target.closest('[role="button"]');
+  if (!clickable) return;
+  const tag = clickable.tagName;
+  if (tag === "BUTTON" || tag === "A") return; // 原生已处理
+  e.preventDefault();
+  clickable.click();
+});
+
 // --- Keyboard Shortcuts ---
 // 注意：Ctrl+K / Ctrl+N / Ctrl+D 等快捷键由 enhancements.js 的 initShortcuts 统一处理
 }
@@ -1455,6 +1538,19 @@ async function handleDelegatedClick(e) {
     resetGeoQuestionForm();
     $("#geoQuestionForm").style.display = "";
     $("#geoQuestionText")?.focus();
+    return;
+  }
+
+  // 仪表盘北极星：跳到产品页并定位 GEO 区做引用检测
+  const gotoDetectBtn = el.closest("[data-action='goto-products-detect']");
+  if (gotoDetectBtn) {
+    showView("products");
+    const p = state.products.find(pp => state.geo_questions.some(q => String(q.product_id) === String(pp.id))) || state.products[0];
+    if (p) selectProduct(p.id);
+    setTimeout(() => {
+      const geoSection = document.querySelector(".pd-geo-section");
+      if (geoSection) geoSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 300);
     return;
   }
 
@@ -1577,7 +1673,8 @@ async function handleDelegatedClick(e) {
       $("#workshopProduct").dispatchEvent(new Event("change"));
     }
     if (platform) {
-      const cb = $(`#workshop .workshop-platforms input[value="${escapeHtml(platform)}"]`);
+      // 直接遍历比较 .value，避免平台名含 "、[、] 等字符时 CSS 属性选择器失配
+      const cb = $$("#workshop .workshop-platforms input[type='checkbox']").find(el => el.value === platform);
       if (cb) cb.checked = true;
     }
     return;
@@ -1605,6 +1702,11 @@ async function handleDelegatedClick(e) {
     await aiOptimizeGeoQuestion(q);
     return;
   }
+  if (btn.classList.contains("rank-check")) {
+    if (isLoading(btn)) return;
+    await doRankCheck(btn.dataset.id, btn.dataset.product, { btn });
+    return;
+  }
   if (btn.classList.contains("cover-geo-question")) {
     try {
       await api(`/api/geo_questions/${btn.dataset.id}`, { method: "PUT", body: JSON.stringify({ status: "covered" }) });
@@ -1626,7 +1728,7 @@ async function handleDelegatedClick(e) {
   // Platform actions（新左右分栏布局：通过按钮 ID 处理；旧卡片视图兼容 class）
   if (btn.id === "platformDetailOpen" || btn.classList.contains("open-platform")) {
     const url = btn.dataset.url;
-    if (url) window.open(url, "_blank");
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
     else toast("该平台未配置发布入口链接", "error");
     return;
   }
@@ -1686,7 +1788,7 @@ async function handleDelegatedClick(e) {
   }
   if (btn.classList.contains("task-open")) {
     const url = btn.dataset.url;
-    if (url) window.open(url, "_blank");
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
     else toast("该平台未配置发布入口链接", "error");
     return;
   }
@@ -1741,10 +1843,13 @@ async function handleDelegatedClick(e) {
   }
   if (btn.classList.contains("delete-user-model")) {
     if (!confirm("确定删除该自定义模型？")) return;
-    api(`/api/user_models/${btn.dataset.id}`, { method: "DELETE" }).then(() => {
+    try {
+      await api(`/api/user_models/${btn.dataset.id}`, { method: "DELETE" });
       toast("模型已删除", "success");
-      load();
-    });
+      await load();
+    } catch (err) {
+      toast("删除失败：" + err.message, "error");
+    }
     return;
   }
 }
@@ -1805,6 +1910,7 @@ const PD_SAVE_LABELS = {
   error: "保存失败",
 };
 let _pdSaving = false; // 防止并发保存
+let _pdDirty = false; // 保存进行中又有新编辑时置脏，finally 里补存，避免静默丢编辑
 function setPdSaveStatus(state) {
   const el = $("#pdSaveStatus");
   if (!el) return;
@@ -1813,7 +1919,7 @@ function setPdSaveStatus(state) {
 }
 // 统一的产品保存函数：支持全字段保存或仅描述保存
 async function saveProductFromForm({ showToast = false, silent = false, onlyDescription = false } = {}) {
-  if (_pdSaving) return;
+  if (_pdSaving) { _pdDirty = true; return; }
   const id = ($("#pdId")?.value) || "";
   const payload = onlyDescription
     ? { description: $("#pdMarkdown")?.value || "" }
@@ -1849,7 +1955,80 @@ async function saveProductFromForm({ showToast = false, silent = false, onlyDesc
     else toast("自动保存失败：" + err.message, "error");
   } finally {
     _pdSaving = false;
+    if (_pdDirty) {
+      _pdDirty = false;
+      // 保存进行期间又产生了新编辑，补存一次（读取最新 DOM 值）
+      saveProductFromForm({ silent: true, onlyDescription });
+    }
   }
+}
+
+// ===== GEO 排名检测（citation check）=====================================
+// 单题检测：让 AI 回答该问题，判断是否引用产品，存一条记录
+async function doRankCheck(questionId, productId, opts = {}) {
+  const product = state.products.find(p => p.id === productId);
+  const question = state.geo_questions.find(q => q.id === questionId);
+  if (!product || !question) return;
+  const settings = state.ai_settings || {};
+  if (!(settings.text_api_key || settings.api_key)) {
+    toast("请先在「AI 设置」配置 API Key", "error");
+    return;
+  }
+  const btn = opts.btn;
+  const silent = opts.silent; // 批量调用时跳过逐题 load/toast，由调用方统一收尾
+  if (btn) setLoading(btn, true);
+  try {
+    const result = await checkGeoRank(settings, product.name, question.question);
+    await geoApi("/api/geo_rank_checks", {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: getCurrentUserId(),
+        product_id: productId,
+        geo_question_id: questionId,
+        cited: !!result.cited,
+        rank: result.rank || 0,
+        snippet: (result.snippet || "").slice(0, 500),
+        raw_response: (result.answer || "").slice(0, 4000),
+        engine: settings.text_model || settings.model || "",
+      }),
+    });
+    if (!silent) {
+      await load();
+      toast(result.cited
+        ? `✓ AI 引用了「${product.name}」${result.rank ? `（第 ${result.rank} 位）` : ""}`
+        : `✗ AI 暂未引用「${product.name}」`, result.cited ? "success" : "default");
+    }
+    return result;
+  } catch (err) {
+    if (!silent) toast("检测失败：" + err.message, "error");
+    else throw err;
+  } finally {
+    if (btn) setLoading(btn, false);
+  }
+}
+
+// 整产品批量检测（串行，避免触发厂商限速）
+async function doRankCheckBatch(productId) {
+  const qs = state.geo_questions.filter(q => String(q.product_id) === String(productId));
+  if (!qs.length) { toast("该产品还没有 GEO 问题", "error"); return; }
+  const settings = state.ai_settings || {};
+  if (!(settings.text_api_key || settings.api_key)) { toast("请先配置 API Key", "error"); return; }
+  // 成本知情同意：批量检测 = N 次 AI 调用，可能消耗较多额度与时间
+  if (!confirm(`将对「${state.products.find(p => p.id === productId)?.name || "该产品"}」的 ${qs.length} 个 GEO 问题逐一检测引用情况（约 ${qs.length} 次 AI 调用，可能耗时 ${Math.ceil(qs.length * 6)}秒+）。继续？`)) return;
+  const btn = $("#pdGeoCheckAllBtn");
+  const original = btn ? btn.textContent : "";
+  let done = 0, cited = 0, failed = 0;
+  for (const q of qs) {
+    if (btn) btn.textContent = `检测中 ${done}/${qs.length}…`;
+    try {
+      const r = await doRankCheck(q.id, productId, { silent: true });
+      if (r && r.cited) cited++;
+    } catch (e) { failed++; }
+    done++;
+  }
+  if (btn) btn.textContent = original;
+  await load(); // 批量结束后统一刷新一次（而非每题刷新，避免 N 次全量拉取）
+  toast(`检测完成：${done} 题，已引用 ${cited}，失败 ${failed}`, cited > 0 ? "success" : "default");
 }
 
 // 将 AI 生成的内容填入文章编辑器，并自动补全标题/类型/平台/产品关联
@@ -1913,7 +2092,7 @@ async function aiOptimizeGeoQuestion(q) {
     let parsed = null;
     try { parsed = JSON.parse(raw); } catch (_) {
       const m = raw.match(/\{[\s\S]*\}/);
-      if (m) parsed = JSON.parse(m[0]);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch (_e) { /* fall through */ } }
     }
     if (!parsed) {
       // 解析失败，仅更新内容角度
@@ -2192,6 +2371,8 @@ async function workshopAiEdit(action) {
 // ===== User Model Events =================================================
 
 $("#saveUserModelBtn").addEventListener("click", async () => {
+  const btn = $("#saveUserModelBtn");
+  if (isLoading(btn)) return;
   const id = $("#umId").value;
   const payload = {
     name: $("#umName").value,
@@ -2205,14 +2386,21 @@ $("#saveUserModelBtn").addEventListener("click", async () => {
     temperature: Number($("#umTemperature").value || 0.7),
   };
   if (!payload.name) return toast("请输入模型名称", "error");
-  if (id) {
-    await api(`/api/user_models/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-  } else {
-    await api("/api/user_models", { method: "POST", body: JSON.stringify(payload) });
+  setLoading(btn, true);
+  try {
+    if (id) {
+      await api(`/api/user_models/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      await api("/api/user_models", { method: "POST", body: JSON.stringify(payload) });
+    }
+    resetUserModelForm();
+    toast("模型已保存", "success");
+    await load();
+  } catch (e) {
+    toast("保存失败：" + e.message, "error");
+  } finally {
+    setLoading(btn, false);
   }
-  resetUserModelForm();
-  toast("模型已保存", "success");
-  await load();
 });
 
 // ===== Auth View =========================================================
@@ -2263,7 +2451,7 @@ function resetUserModelForm() {
   $("#umTemperature").value = 0.7;
 }
 
-function applyUserModelToSettings(id) {
+async function applyUserModelToSettings(id) {
   const m = state.user_models.find(x => x.id === id);
   if (!m) return;
   $("#aiMode").value = "api";
@@ -2282,11 +2470,17 @@ function applyUserModelToSettings(id) {
   };
   if (m.text_api_key) payload.text_api_key = m.text_api_key;
   if (m.image_api_key) payload.image_api_key = m.image_api_key;
-  const recordId = aiSettings.id || null;
-  const req = recordId
-    ? geoApi(`/api/ai_settings/${recordId}`, { method: "PUT", body: JSON.stringify(payload) })
-    : geoApi("/api/ai_settings", { method: "POST", body: JSON.stringify({ ...payload, mode: "api" }) });
-  req.then(() => { toast(`已切换到模型：${m.name}`, "success"); load(); }).catch(err => toast(err.message, "error"));
+  try {
+    if (aiSettings.id) {
+      await geoApi(`/api/ai_settings/${aiSettings.id}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      await geoApi("/api/ai_settings", { method: "POST", body: JSON.stringify({ ...payload, mode: "api" }) });
+    }
+    toast(`已切换到模型：${m.name}`, "success");
+    await load();
+  } catch (err) {
+    toast("切换模型失败：" + err.message, "error");
+  }
 }
 
 // ===== Pre-registered Accounts ===========================================

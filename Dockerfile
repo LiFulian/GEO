@@ -9,10 +9,10 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-# 利用 npm 缓存
+# 利用 npm 缓存（vite 是 devDependency，不能 --omit=dev，否则 build 会失败）
 COPY frontend/package*.json ./
 RUN npm config set registry https://registry.npmmirror.com && \
-    npm ci --omit=dev || npm install
+    (npm ci || npm install)
 
 # 复制源码并构建
 COPY frontend/ ./
@@ -21,14 +21,14 @@ RUN npm run build
 # ---- 阶段 2：运行时（PocketBase） ----
 FROM alpine:3.19 AS runtime
 
-# PocketBase 版本与运行时依赖
+# 下载 PocketBase（自动识别 amd64 / arm64，支持 x86 与 ARM/Apple Silicon 服务器）
 ARG PB_VERSION=0.39.4
 RUN apk add --no-cache ca-certificates unzip wget tzdata && \
     cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    echo "Asia/Shanghai" > /etc/timezone
-
-# 下载 PocketBase
-RUN wget -q "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_amd64.zip" -O /tmp/pb.zip && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    PB_ARCH="amd64" && \
+    case "$(uname -m)" in aarch64|arm64) PB_ARCH="arm64" ;; esac && \
+    wget -q "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_${PB_ARCH}.zip" -O /tmp/pb.zip && \
     unzip /tmp/pb.zip -d /pb && \
     chmod +x /pb/pocketbase && \
     rm /tmp/pb.zip
@@ -36,8 +36,9 @@ RUN wget -q "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VE
 # 工作目录
 WORKDIR /pb
 
-# 复制迁移文件
+# 复制迁移文件与 JS hooks（AI 代理等）
 COPY pocketbase/pb_migrations/ /pb/pb_migrations/
+COPY pocketbase/pb_hooks/ /pb/pb_hooks/
 
 # 复制前端构建产物（PocketBase 静态托管）
 COPY --from=frontend-builder /app/frontend/dist /pb/pb_public

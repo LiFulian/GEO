@@ -1002,35 +1002,7 @@ select {
 .coverage-gaps { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .coverage-gaps:empty { display: none; }
 
-/* ============================================================
-   Flow (Dashboard intro)
-   ============================================================ */
-
-.flow-desc { font-size: 13px; line-height: 1.7; margin-bottom: 16px; color: var(--text-secondary); }
-.flow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  flex-wrap: wrap;
-}
-.flow span {
-  padding: 6px 12px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  transition: all var(--t-fast);
-}
-.flow span:hover { border-color: var(--border-glow); color: var(--primary); }
-.flow-arrow {
-  color: var(--primary);
-  padding: 0 !important;
-  background: transparent !important;
-  border: none !important;
-  font-weight: 700;
-}
+/* （原 .flow / .flow-desc / .flow-arrow 仪表盘引导样式已删除：HTML 与 JS 中均无引用，属死代码） */
 
 /* ============================================================
    Lists & Cards - 精致卡片
@@ -4163,10 +4135,12 @@ body.dark .topbar {
 
 body.dark .search,
 body.dark input[type="text"],
+body.dark input[type="search"],
 body.dark input[type="email"],
 body.dark input[type="password"],
 body.dark input[type="url"],
 body.dark input[type="number"],
+body.dark input[type="tel"],
 body.dark textarea,
 body.dark select {
   background: var(--bg-subtle);
@@ -5045,4 +5019,45 @@ body.dark .achievement-badge.unlocked {
 /* ============================================================
    路由 hash 提示（可选：浏览器原生支持，无需额外样式）
    ============================================================ */
+
+/* ============================================================
+   GEO 排名检测 / 引用率（北极星指标）
+   ============================================================ */
+
+.citation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-left: 4px solid var(--text-muted);
+  background: var(--bg-card);
+}
+.citation-header.good { border-left-color: #22c55e; background: linear-gradient(90deg, rgba(34,197,94,0.08), var(--bg-card) 60%); }
+.citation-header.medium { border-left-color: #f59e0b; background: linear-gradient(90deg, rgba(245,158,11,0.08), var(--bg-card) 60%); }
+.citation-header.low { border-left-color: #ef4444; background: linear-gradient(90deg, rgba(239,68,68,0.08), var(--bg-card) 60%); }
+.citation-header.none { border-left-color: var(--primary); }
+.citation-headline { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.citation-rate {
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--text);
+  letter-spacing: -1px;
+}
+.citation-rate.none { color: var(--text-muted); }
+.citation-pct { font-size: 18px; font-weight: 600; margin-left: 2px; }
+.citation-desc strong { display: block; font-size: 15px; margin-bottom: 2px; }
+.citation-desc p { margin: 0; max-width: 60ch; }
+.citation-actions { flex-shrink: 0; }
+
+/* GEO 问题卡片上的引用状态徽章 */
+.tag.rank-cited { background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.35); }
+.tag.rank-miss { background: rgba(239,68,68,0.12); color: #dc2626; border: 1px solid rgba(239,68,68,0.3); }
+.tag.rank-none { background: var(--bg-subtle); color: var(--text-muted); border: 1px dashed var(--border); }
+
+@media (max-width: 640px) {
+  .citation-header { flex-direction: column; align-items: flex-start; }
+  .citation-rate { font-size: 30px; }
+}
 
