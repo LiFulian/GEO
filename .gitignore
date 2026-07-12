@@ -28,6 +28,3 @@ pocketbase/pb_data/
 
 # Docker
 .docker/
-
-# Test artifacts
-test_*.cjs

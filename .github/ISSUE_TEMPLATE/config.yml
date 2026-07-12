@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 提问与讨论
+    url: https://github.com/your-org/geo-studio/discussions
+    about: 一般使用问题、想法碰撞在这里发起讨论
+  - name: 安全漏洞
+    url: https://github.com/your-org/geo-studio/security/advisories/new
+    about: 私密报告安全漏洞，请勿在公开 issue 中泄露

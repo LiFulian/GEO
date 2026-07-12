@@ -1,18 +1,41 @@
 {
-  "name": "frontend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "geo-studio-frontend",
+  "version": "0.1.0",
+  "description": "GEO Studio 前端 - 原生 JS + Vite，无框架",
+  "private": true,
   "type": "module",
+  "main": "index.html",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "NODE_PATH=./node_modules node ../test_fixes_smoke.cjs",
+    "test:all": "NODE_PATH=./node_modules bash -c 'for t in ../test_*.cjs; do node \"$t\" || exit 1; done'"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "geo",
+    "ai-optimization",
+    "generative-engine-optimization",
+    "pocketbase",
+    "vite",
+    "content-marketing"
+  ],
+  "author": "GEO Studio Contributors",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/geo-studio.git",
+    "directory": "/frontend"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/geo-studio/issues"
+  },
+  "homepage": "https://github.com/your-org/geo-studio#readme",
   "devDependencies": {
+    "playwright": "^1.61.1",
     "vite": "^6.4.3"
   }
 }

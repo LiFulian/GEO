@@ -1,6 +1,6 @@
 #!/bin/bash
 # GEO Studio — 项目管理脚本
-# 用法: bash run.sh [start|stop|restart]
+# 用法: bash run.sh [start|stop|restart|install|status]
 # 只操作本项目的 PocketBase(8085) 和 Vite(5175)，不影响其他端口
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -213,12 +213,20 @@ case "${1:-start}" in
     echo "Vite:       $(if [ -f "$VITE_PID_FILE" ] && is_running "$(cat "$VITE_PID_FILE")"; then echo -e "${GREEN}运行中 $(cat "$VITE_PID_FILE")${NC}"; else echo -e "${RED}已停止${NC}"; fi)"
     ;;
 
+  install)
+    echo -e "${BLUE}📦 安装依赖（PocketBase 二进制 + 前端 node_modules）...${NC}"
+    ensure_pb
+    ensure_fe
+    echo -e "${GREEN}✅ 依赖就绪（未启动服务）${NC}"
+    ;;
+
   *)
-    echo "用法: bash run.sh [start|stop|restart|status]"
+    echo "用法: bash run.sh [start|stop|restart|install|status]"
     echo ""
     echo "  start   启动前端和后端"
     echo "  stop    停止前端和后端"
     echo "  restart 重启前端和后端"
+    echo "  install 仅装依赖（PocketBase + node_modules），不启动服务"
     echo "  status  查看运行状态"
     exit 1
     ;;
