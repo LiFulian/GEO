@@ -19,7 +19,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- 阶段 2：运行时（PocketBase） ----
-FROM alpine:3.19 AS runtime
+FROM alpine:3.24 AS runtime
 
 # 下载 PocketBase（自动识别 amd64 / arm64，支持 x86 与 ARM/Apple Silicon 服务器）
 ARG PB_VERSION=0.39.4
