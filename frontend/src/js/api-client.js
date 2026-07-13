@@ -272,11 +272,18 @@ const COLLECTION_MAP = {
   product_images: "product_images",
 };
 
+// 已知的「动作端点」——单参 collection map 无法区分，必须在路由翻译前优先识别。
+// 否则 /api/tasks/assign 会被误判为「publish_tasks 列表 POST」（assign 不是合法 id），
+// 导致「批量分配发布任务」功能完全失效。
+const ACTION_PATHS = new Set(["/api/bootstrap", "/api/coverage", "/api/backup", "/api/tasks/assign"]);
+
 function translatePath(path, method) {
+  if (ACTION_PATHS.has(path)) return { type: "action", path };
+
   const parts = path.replace(/^\/api\//, "").split("/");
   const resource = parts[0];
 
-    if (parts.length === 2 && /^[a-z0-9]+$/i.test(parts[1]) && parts[1].length >= 10) {
+  if (parts.length === 2 && /^[a-z0-9]+$/i.test(parts[1]) && parts[1].length >= 10) {
     const collection = COLLECTION_MAP[resource];
     if (!collection) return { type: "action", path };
     return { type: "record", collection, id: parts[1] };
@@ -353,43 +360,61 @@ function flattenTaskExpand(t, expand) {
 
 // ===== AI 端点处理（前端直连，经同源代理规避 CORS） =============================================
 
+// 全局 loading 引用计数：所有 AI HTTP 都走 aiFetch，统一在这里显隐全局 loader。
+// 用计数而非布尔，是为了让批量检测（N 次连续 callAI）期间 loader 持续显示、
+// 不会在每次调用间隙闪烁；最后一个请求结束时才隐藏。
+let _aiLoaderDepth = 0;
+function _aiLoaderStart() {
+  _aiLoaderDepth++;
+  if (typeof showGlobalLoader === "function") showGlobalLoader();
+}
+function _aiLoaderEnd() {
+  _aiLoaderDepth = Math.max(0, _aiLoaderDepth - 1);
+  if (_aiLoaderDepth === 0 && typeof hideGlobalLoader === "function") hideGlobalLoader();
+}
+
 // 统一的 AI HTTP 请求：优先走 PocketBase 同源代理 /api/ai/proxy（规避浏览器跨域），
 // 代理不可用（404/未部署 hook）或网络异常时回退到浏览器直连（兼容智谱等允许跨域的厂商）。
 // headers / bodyObj 为发往上游 AI 厂商的请求头与请求体。
 async function aiFetch(targetUrl, headers, bodyObj) {
-  const proxyUrl = `${CONFIG.pbUrl}/api/ai/proxy`;
+  _aiLoaderStart();
   try {
-    const token = await apiAuth();
-    const proxyRes = await fetch(proxyUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: token },
-      body: JSON.stringify({ url: targetUrl, method: "POST", headers, body: bodyObj }),
-    });
-    if (proxyRes.status !== 404) {
-      const data = await proxyRes.json().catch(() => null);
-      if (!proxyRes.ok) {
-        const msg = (data && data.error && data.error.message) || `HTTP ${proxyRes.status}`;
-        throw new ApiError(`AI 调用失败：${msg}`, proxyRes.status);
+    const proxyUrl = `${CONFIG.pbUrl}/api/ai/proxy`;
+    try {
+      const token = await apiAuth();
+      const proxyRes = await fetch(proxyUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: token },
+        body: JSON.stringify({ url: targetUrl, method: "POST", headers, body: bodyObj }),
+      });
+      if (proxyRes.status !== 404) {
+        const data = await proxyRes.json().catch(() => null);
+        if (!proxyRes.ok) {
+          const msg = (data && data.error && data.error.message) || `HTTP ${proxyRes.status}`;
+          throw new ApiError(`AI 调用失败：${msg}`, proxyRes.status);
+        }
+        return data;
       }
-      return data;
+      // 404 → 代理未挂载，落到下方直连
+    } catch (err) {
+      if (err instanceof ApiError) throw err; // 代理已返回的错误，原样抛出
+      // 其它异常（网络/CORS）→ 回退直连
     }
-    // 404 → 代理未挂载，落到下方直连
-  } catch (err) {
-    if (err instanceof ApiError) throw err; // 代理已返回的错误，原样抛出
-    // 其它异常（网络/CORS）→ 回退直连
-  }
 
-  // 直连（兜底）
-  const res = await fetch(targetUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(bodyObj),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new ApiError(`AI 调用失败：${err.error?.message || `HTTP ${res.status}`}`, res.status);
+    // 直连（兜底）
+    const res = await fetch(targetUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(bodyObj),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(`AI 调用失败：${err.error?.message || `HTTP ${res.status}`}`, res.status);
+    }
+    return await res.json();
+  } finally {
+    _aiLoaderEnd();
   }
-  return await res.json();
 }
 
 async function callAI(settings, messages) {

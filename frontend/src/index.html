@@ -148,7 +148,7 @@
             <div class="stat-head"><small>产品</small><span class="stat-icon"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16 L21 8 C21 6 19 5 12 5 C5 5 3 6 3 8 L3 16 C3 18 5 19 12 19 C19 19 21 18 21 16 Z"/><path d="M3 8 C3 10 5 11 12 11 C19 11 21 10 21 8"/></svg></span></div>
             <span id="statProducts" class="stat-num">0</span>
           </article>
-          <article class="stat-clickable" role="button" tabindex="0" data-jump="products">
+          <article class="stat-clickable" role="button" tabindex="0" data-jump="products" data-scroll="geo">
             <div class="stat-head"><small>GEO 问题</small><span class="stat-icon"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22 C16 18 20 14 20 10 C20 5 16 2 12 2 C8 2 4 5 4 10 C4 14 8 18 12 22 Z"/><circle cx="12" cy="10" r="2.5"/></svg></span></div>
             <span id="statQuestions" class="stat-num">0</span>
           </article>
@@ -237,7 +237,7 @@
               <button id="refreshTipBtn" class="btn ghost sm" type="button" title="换一个">🔄</button>
             </div>
             <div id="dailyTipBox" class="daily-tip-box">
-              <p class="daily-tip-text">加载中...</p>
+              <p class="daily-tip-text">💡 开头用用户最常问的问题直接回答，能提高被 AI 引用的概率～</p>
             </div>
             <div class="achievement-strip" id="achievementStrip"></div>
           </section>
@@ -272,7 +272,7 @@
               </div>
             </div>
 
-            <!-- 详情/编辑面板（扁平化：档案 + GEO 问题 同页） -->
+            <!-- 详情/编辑面板（Tabs：基础信息 / GEO 问题 / 深度编辑） -->
             <div id="productDetailPanel" class="product-detail-panel" style="display:none">
               <!-- 顶部操作栏 -->
               <div class="product-tabs">
@@ -281,160 +281,247 @@
                 <div class="product-detail-actions">
                   <button id="productDetailEdit" class="btn ghost sm" type="button">编辑</button>
                   <button id="productDetailDelete" class="btn ghost sm danger" type="button">删除</button>
-                  <button id="productGoToDetail" class="btn ghost sm" type="button">深度编辑</button>
+                  <button id="productGoToDetail" class="btn ghost sm" type="button">深度编辑 →</button>
                 </div>
               </div>
 
-              <!-- 查看模式 -->
-              <div id="productViewMode" class="product-view-mode">
-                <div class="product-info-grid">
-                  <div class="product-info-item">
-                    <label>产品类型</label>
-                    <p id="productViewType">-</p>
-                  </div>
-                  <div class="product-info-item">
-                    <label>产品链接</label>
-                    <p id="productViewUrl">-</p>
-                  </div>
-                  <div class="product-info-item">
-                    <label>目标用户</label>
-                    <p id="productViewAudience">-</p>
-                  </div>
-                  <div class="product-info-item">
-                    <label>核心卖点</label>
-                    <p id="productViewSellingPoints">-</p>
-                  </div>
-                  <div class="product-info-item">
-                    <label>竞品/替代品</label>
-                    <p id="productViewCompetitors">-</p>
-                  </div>
-                  <div class="product-info-item">
-                    <label>品牌语气</label>
-                    <p id="productViewTone">-</p>
-                  </div>
-                  <div class="product-info-item">
-                    <label>转化目标</label>
-                    <p id="productViewGoal">-</p>
-                  </div>
-                  <div class="product-info-item">
-                    <label>禁用表达</label>
-                    <p id="productViewForbiddenWords">-</p>
-                  </div>
-                </div>
-                <div class="product-stats">
-                  <div class="product-stat">
-                    <span id="productStatQuestions" class="product-stat-num">0</span>
-                    <span class="product-stat-label">GEO 问题</span>
-                  </div>
-                  <div class="product-stat">
-                    <span id="productStatArticles" class="product-stat-num">0</span>
-                    <span class="product-stat-label">内容</span>
-                  </div>
-                  <div class="product-stat">
-                    <span id="productStatCoverage" class="product-stat-num">0%</span>
-                    <span class="product-stat-label">覆盖率</span>
-                  </div>
-                  <div class="product-stat">
-                    <span id="productStatCitation" class="product-stat-num">—</span>
-                    <span class="product-stat-label">GEO 引用率</span>
-                  </div>
-                </div>
-                <div class="product-quick-actions">
-                  <button id="productGoToWorkshop" class="btn ghost" type="button">生成内容</button>
-                </div>
+              <!-- Tab 导航 -->
+              <div class="product-tab-bar" role="tablist">
+                <button class="product-tab active" data-tab="basic" role="tab" type="button">📝 基础信息</button>
+                <button class="product-tab" data-tab="geo" role="tab" type="button">❓ GEO 问题 <span id="productTabGeoCount" class="count-badge">0</span></button>
+                <button class="product-tab" data-tab="deep" role="tab" type="button">📄 深度编辑</button>
               </div>
 
-              <!-- 编辑模式 -->
-              <div id="productEditMode" class="product-edit-mode" style="display:none">
-                <form id="productForm" class="compact-form">
-                  <input type="hidden" name="id" id="productId" />
-                  <div class="grid two small-gap">
-                    <label class="field"><span>产品名称 *</span><input name="name" required placeholder="例如：AI 简历优化小程序" /></label>
-                    <label class="field"><span>产品类型</span><input name="type" placeholder="网站 / 小程序 / SaaS / App" /></label>
-                  </div>
-                  <label class="field"><span>产品链接</span><input name="url" placeholder="https://..." /></label>
-                  <label class="field"><span>目标用户</span><textarea name="audience" placeholder="谁会用？他们有什么痛点？"></textarea></label>
-                  <label class="field"><span>核心卖点</span><textarea name="selling_points" placeholder="功能、优势、差异点"></textarea></label>
-                  <label class="field"><span>竞品 / 替代品</span><textarea name="competitors" placeholder="用户现在可能用什么替代方案？"></textarea></label>
-                  <div class="grid two small-gap">
-                    <label class="field"><span>品牌语气</span><input name="tone" value="真实、专业、克制" /></label>
-                    <label class="field"><span>转化目标</span><input name="goal" placeholder="访问官网 / 体验小程序 / 留资 / 下载" /></label>
-                  </div>
-                  <label class="field"><span>禁用表达</span><input name="forbidden_words" placeholder="绝对化、夸大、未证实表述" /></label>
-                  <div class="button-row">
-                    <button id="saveProductBtn" class="btn primary" type="submit">保存</button>
-                    <button id="cancelProductBtn" class="btn ghost" type="button">取消</button>
-                  </div>
-                </form>
-
-                <div class="modal-divider"></div>
-
-                <div class="modal-ai-section">
-                  <h4>AI 梳理产品档案</h4>
-                  <p class="hint muted small">把零散介绍、官网文案或想法粘进来，AI 会整理成结构化产品档案。</p>
-                  <label class="field"><span>产品描述</span><textarea id="productAiInput" class="product-ai-input" placeholder="例如：我们做了一个给小团队用的客户跟进小程序，可以记录线索、提醒回访、生成日报，目标是让老板不用 Excel 管客户..."></textarea></label>
-                  <div class="button-row">
-                    <button id="productAiDirectBtn" class="btn primary" type="button">AI 自动梳理</button>
-                    <button id="productAiPromptBtn" class="btn ghost" type="button">生成 Prompt</button>
-                    <button id="productAiApplyBtn" class="btn ghost" type="button">应用结果</button>
-                  </div>
-                  <textarea id="productAiResult" class="product-ai-result" placeholder='这里会显示 Prompt 或 AI 返回的 JSON。你也可以手动粘贴 JSON 后点击"应用结果"。'></textarea>
-                </div>
-              </div>
-
-              <!-- GEO 问题（扁平化：直接放在档案下方，无 Tab） -->
-              <div class="pd-geo-section">
-                <div class="panel-heading pd-geo-heading">
-                  <h3>GEO 问题 <span id="productGeoCount" class="count-badge">0</span></h3>
-                  <div class="pd-geo-bar">
-                    <input id="geoSearch" class="search" placeholder="搜索问题 / 意图 / 人群 / 平台" />
-                    <button type="button" id="pdGeoCheckAllBtn" class="btn accent sm" title="让 AI 回答本产品的所有问题并检测引用情况">🔍 检测全部引用</button>
-                    <button type="button" id="pdGeoToggleForm" class="btn primary sm">+ 新增问题</button>
-                  </div>
-                </div>
-
-                <form id="geoQuestionForm" class="panel form pd-geo-form" style="display:none">
-                  <div class="panel-heading">
-                    <h3 id="geoQuestionFormTitle">新增 GEO 问题</h3>
-                    <button id="resetGeoQuestionBtn" class="btn ghost sm" type="button">收起</button>
-                  </div>
-                  <input type="hidden" id="geoQuestionId" />
-                  <input type="hidden" id="geoProduct" />
-                  <label class="field"><span>用户会问 AI 的问题</span><textarea id="geoQuestionText" required placeholder="例如：有没有适合小团队使用的客户跟进小程序？"></textarea></label>
-                  <div class="grid two small-gap">
-                    <label class="field"><span>意图</span><input id="geoIntent" placeholder="找工具 / 做对比 / 解决问题" /></label>
-                    <label class="field"><span>人群</span><input id="geoAudience" placeholder="小团队老板 / 运营 / 开发者" /></label>
-                  </div>
-                  <div class="grid two small-gap">
-                    <label class="field"><span>优先级</span><select id="geoPriority"><option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select></label>
-                    <label class="field"><span>状态</span><select id="geoStatus"><option value="active">active</option><option value="covered">covered</option><option value="paused">paused</option></select></label>
-                  </div>
-                  <label class="field"><span>内容角度</span><textarea id="geoAngle" placeholder="建议如何回答这个问题，怎样自然带出产品"></textarea></label>
-                  <label class="field"><span>目标平台</span><input id="geoPlatform" placeholder="知乎 / 公众号 / CSDN / 小红书，可为空" /></label>
-                  <div class="button-row">
-                    <button class="btn primary" type="submit">保存问题</button>
-                    <button id="cancelGeoQuestionBtn" class="btn ghost" type="button">取消</button>
-                    <button id="geoAiAnswerBtn" class="btn accent" type="button">AI 生成内容角度</button>
-                  </div>
-                </form>
-
-                <details class="collapse-section pd-geo-ai">
-                  <summary>AI 批量生成问题</summary>
-                  <div class="form">
-                    <label class="field"><span>问题数量</span><input id="geoPromptCount" type="number" min="3" max="30" value="12" /></label>
-                    <div class="button-row">
-                      <button id="buildGeoPromptBtn" class="btn primary" type="button">生成 Prompt</button>
-                      <button id="copyGeoPromptBtn" class="btn ghost" type="button">复制</button>
+              <!-- Tab 1: 基础信息（查看 + 编辑） -->
+              <div class="product-tab-panel active" data-panel="basic" role="tabpanel">
+                <!-- 查看模式 -->
+                <div id="productViewMode" class="product-view-mode">
+                  <div class="product-info-grid">
+                    <div class="product-info-item">
+                      <label>产品类型</label>
+                      <p id="productViewType">-</p>
                     </div>
-                    <textarea id="geoPromptBox" class="big-text" placeholder="生成后复制到 Codex / 豆包 / Trae"></textarea>
-                    <h4 class="sub-section-title">粘贴 AI 返回的问题 JSON</h4>
-                    <textarea id="geoImportBox" class="big-text" placeholder='[{"question":"...","intent":"...","priority":"high"}]'></textarea>
-                    <button id="importGeoQuestionsBtn" class="btn primary" type="button">导入问题库</button>
+                    <div class="product-info-item">
+                      <label>产品链接</label>
+                      <p id="productViewUrl">-</p>
+                    </div>
+                    <div class="product-info-item">
+                      <label>目标用户</label>
+                      <p id="productViewAudience">-</p>
+                    </div>
+                    <div class="product-info-item">
+                      <label>核心卖点</label>
+                      <p id="productViewSellingPoints">-</p>
+                    </div>
+                    <div class="product-info-item">
+                      <label>竞品/替代品</label>
+                      <p id="productViewCompetitors">-</p>
+                    </div>
+                    <div class="product-info-item">
+                      <label>品牌语气</label>
+                      <p id="productViewTone">-</p>
+                    </div>
+                    <div class="product-info-item">
+                      <label>转化目标</label>
+                      <p id="productViewGoal">-</p>
+                    </div>
+                    <div class="product-info-item">
+                      <label>禁用表达</label>
+                      <p id="productViewForbiddenWords">-</p>
+                    </div>
                   </div>
-                </details>
+                  <div class="product-stats">
+                    <div class="product-stat">
+                      <span id="productStatQuestions" class="product-stat-num">0</span>
+                      <span class="product-stat-label">GEO 问题</span>
+                    </div>
+                    <div class="product-stat">
+                      <span id="productStatArticles" class="product-stat-num">0</span>
+                      <span class="product-stat-label">内容</span>
+                    </div>
+                    <div class="product-stat">
+                      <span id="productStatCoverage" class="product-stat-num">0%</span>
+                      <span class="product-stat-label">覆盖率</span>
+                    </div>
+                    <div class="product-stat">
+                      <span id="productStatCitation" class="product-stat-num">—</span>
+                      <span class="product-stat-label">GEO 引用率</span>
+                    </div>
+                  </div>
+                  <div class="product-quick-actions">
+                    <button id="productGoToWorkshop" class="btn ghost" type="button">生成内容</button>
+                  </div>
+                </div>
 
-                <div id="geoQuestionList" class="cards pd-geo-list"></div>
-              </div><!-- /GEO 问题 -->
+                <!-- 编辑模式 -->
+                <div id="productEditMode" class="product-edit-mode" style="display:none">
+                  <form id="productForm" class="compact-form">
+                    <input type="hidden" name="id" id="productId" />
+                    <div class="grid two small-gap">
+                      <label class="field"><span>产品名称 *</span><input name="name" required placeholder="例如：AI 简历优化小程序" /></label>
+                      <label class="field"><span>产品类型</span><input name="type" placeholder="网站 / 小程序 / SaaS / App" /></label>
+                    </div>
+                    <label class="field"><span>产品链接</span><input name="url" placeholder="https://..." /></label>
+                    <label class="field"><span>目标用户</span><textarea name="audience" placeholder="谁会用？他们有什么痛点？"></textarea></label>
+                    <label class="field"><span>核心卖点</span><textarea name="selling_points" placeholder="功能、优势、差异点"></textarea></label>
+                    <label class="field"><span>竞品 / 替代品</span><textarea name="competitors" placeholder="用户现在可能用什么替代方案？"></textarea></label>
+                    <div class="grid two small-gap">
+                      <label class="field"><span>品牌语气</span><input name="tone" value="真实、专业、克制" /></label>
+                      <label class="field"><span>转化目标</span><input name="goal" placeholder="访问官网 / 体验小程序 / 留资 / 下载" /></label>
+                    </div>
+                    <label class="field"><span>禁用表达</span><input name="forbidden_words" placeholder="绝对化、夸大、未证实表述" /></label>
+                    <div class="button-row">
+                      <button id="saveProductBtn" class="btn primary" type="submit">保存</button>
+                      <button id="cancelProductBtn" class="btn ghost" type="button">取消</button>
+                    </div>
+                  </form>
+
+                  <div class="modal-divider"></div>
+
+                  <div class="modal-ai-section">
+                    <h4>AI 梳理产品档案</h4>
+                    <p class="hint muted small">把零散介绍、官网文案或想法粘进来，AI 会整理成结构化产品档案。</p>
+                    <label class="field"><span>产品描述</span><textarea id="productAiInput" class="product-ai-input" placeholder="例如：我们做了一个给小团队用的客户跟进小程序，可以记录线索、提醒回访、生成日报，目标是让老板不用 Excel 管客户..."></textarea></label>
+                    <div class="button-row">
+                      <button id="productAiDirectBtn" class="btn primary" type="button">AI 自动梳理</button>
+                      <button id="productAiPromptBtn" class="btn ghost" type="button">生成 Prompt</button>
+                      <button id="productAiApplyBtn" class="btn ghost" type="button">应用结果</button>
+                    </div>
+                    <textarea id="productAiResult" class="product-ai-result" placeholder='这里会显示 Prompt 或 AI 返回的 JSON。你也可以手动粘贴 JSON 后点击"应用结果"。'></textarea>
+                  </div>
+                </div>
+              </div><!-- /Tab basic -->
+
+              <!-- Tab 2: GEO 问题（从原扁平区域搬入） -->
+              <div class="product-tab-panel" data-panel="geo" role="tabpanel">
+                <div class="pd-geo-section">
+                  <div class="panel-heading pd-geo-heading">
+                    <h3>GEO 问题 <span id="productGeoCount" class="count-badge">0</span></h3>
+                    <div class="pd-geo-bar">
+                      <input id="geoSearch" class="search" placeholder="搜索问题 / 意图 / 人群 / 平台" />
+                      <button type="button" id="pdGeoCheckAllBtn" class="btn accent sm" title="让 AI 回答本产品的所有问题并检测引用情况">🔍 检测全部引用</button>
+                      <button type="button" id="pdGeoToggleForm" class="btn primary sm">+ 新增问题</button>
+                    </div>
+                  </div>
+
+                  <form id="geoQuestionForm" class="panel form pd-geo-form" style="display:none">
+                    <div class="panel-heading">
+                      <h3 id="geoQuestionFormTitle">新增 GEO 问题</h3>
+                      <button id="resetGeoQuestionBtn" class="btn ghost sm" type="button">收起</button>
+                    </div>
+                    <input type="hidden" id="geoQuestionId" />
+                    <input type="hidden" id="geoProduct" />
+                    <label class="field"><span>用户会问 AI 的问题</span><textarea id="geoQuestionText" required placeholder="例如：有没有适合小团队使用的客户跟进小程序？"></textarea></label>
+                    <div class="grid two small-gap">
+                      <label class="field"><span>意图</span><input id="geoIntent" placeholder="找工具 / 做对比 / 解决问题" /></label>
+                      <label class="field"><span>人群</span><input id="geoAudience" placeholder="小团队老板 / 运营 / 开发者" /></label>
+                    </div>
+                    <div class="grid two small-gap">
+                      <label class="field"><span>优先级</span><select id="geoPriority"><option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select></label>
+                      <label class="field"><span>状态</span><select id="geoStatus"><option value="active">active</option><option value="covered">covered</option><option value="paused">paused</option></select></label>
+                    </div>
+                    <label class="field"><span>内容角度</span><textarea id="geoAngle" placeholder="建议如何回答这个问题，怎样自然带出产品"></textarea></label>
+                    <label class="field"><span>目标平台</span><input id="geoPlatform" placeholder="知乎 / 公众号 / CSDN / 小红书，可为空" /></label>
+                    <div class="button-row">
+                      <button class="btn primary" type="submit">保存问题</button>
+                      <button id="cancelGeoQuestionBtn" class="btn ghost" type="button">取消</button>
+                      <button id="geoAiAnswerBtn" class="btn accent" type="button">AI 生成内容角度</button>
+                    </div>
+                  </form>
+
+                  <details class="collapse-section pd-geo-ai">
+                    <summary>AI 批量生成问题</summary>
+                    <div class="form">
+                      <label class="field"><span>问题数量</span><input id="geoPromptCount" type="number" min="3" max="30" value="12" /></label>
+                      <div class="button-row">
+                        <button id="buildGeoPromptBtn" class="btn primary" type="button">生成 Prompt</button>
+                        <button id="copyGeoPromptBtn" class="btn ghost" type="button">复制</button>
+                      </div>
+                      <textarea id="geoPromptBox" class="big-text" placeholder="生成后复制到 Codex / 豆包 / Trae"></textarea>
+                      <h4 class="sub-section-title">粘贴 AI 返回的问题 JSON</h4>
+                      <textarea id="geoImportBox" class="big-text" placeholder='[{"question":"...","intent":"...","priority":"high"}]'></textarea>
+                      <button id="importGeoQuestionsBtn" class="btn primary" type="button">导入问题库</button>
+                    </div>
+                  </details>
+
+                  <div id="geoQuestionList" class="cards pd-geo-list"></div>
+                </div>
+              </div><!-- /Tab geo -->
+
+              <!-- Tab 3: 深度编辑（从独立 section 搬入） -->
+              <div class="product-tab-panel product-tab-panel-deep" data-panel="deep" role="tabpanel">
+                <div class="product-detail-deep">
+                  <div class="product-detail-deep-left">
+                    <div class="product-meta">
+                      <div class="product-meta-field">
+                        <label>产品名称</label>
+                        <input type="text" id="pdName" placeholder="产品名称" />
+                      </div>
+                      <div class="product-meta-field">
+                        <label>类型</label>
+                        <input type="text" id="pdType" placeholder="网站 / 小程序 / SaaS / App" />
+                      </div>
+                      <div class="product-meta-field">
+                        <label>链接</label>
+                        <input type="url" id="pdUrl" placeholder="https://..." />
+                      </div>
+                      <div class="product-meta-field">
+                        <label>状态</label>
+                        <select id="pdStatus">
+                          <option value="active">active</option>
+                          <option value="draft">draft</option>
+                          <option value="paused">paused</option>
+                          <option value="archived">archived</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="product-meta-actions">
+                      <span id="pdSaveStatus" class="pd-save-status" data-state="idle">未修改</span>
+                      <button id="pdSaveBtn" class="btn primary accent" type="button">保存</button>
+                      <button id="pdDeleteBtn" class="btn ghost danger" type="button">删除产品</button>
+                    </div>
+                    <div class="product-md-editor">
+                      <div class="product-md-toolbar">
+                        <div class="product-md-toolbar-left">
+                          <button type="button" class="pd-view-btn active" data-mode="edit">编辑</button>
+                          <button type="button" class="pd-view-btn" data-mode="preview">预览</button>
+                        </div>
+                      </div>
+                      <textarea id="pdMarkdown" class="product-md-textarea" placeholder="在此撰写产品介绍 Markdown…&#10;&#10;## 产品概述&#10;&#10;## 核心功能&#10;&#10;## 适用场景&#10;&#10;## 优势与差异"></textarea>
+                      <div id="pdPreview" class="product-md-preview preview-body" style="display:none"></div>
+                    </div>
+                    <div class="product-images-section">
+                      <div class="panel-heading">
+                        <h3>产品图片</h3>
+                        <button id="pdUploadImageBtn" class="btn ghost sm" type="button">上传图片</button>
+                      </div>
+                      <div id="pdImageGallery" class="product-images"></div>
+                      <div id="pdImagesEmpty" class="empty-state">
+                        <div class="empty-state-icon">🖼</div>
+                        <div class="empty-state-title">暂无产品图片</div>
+                        <p class="muted">上传产品截图或宣传图，AI 将自动生成图片描述</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="product-detail-deep-right">
+                    <div class="ai-chat-panel">
+                      <div class="ai-chat-header">
+                        <span class="ai-chat-header-icon">⌬</span>
+                        <span>AI 助手</span>
+                      </div>
+                      <div id="pdChatMessages" class="ai-chat-messages">
+                        <div class="ai-chat-msg assistant">
+                          <div class="ai-chat-msg-content">你好！我是 AI 助手，可以帮助你优化产品介绍。<br><br>你可以：<br>• 请我润色某段文字<br>• 补充产品亮点<br>• 优化 Markdown 排版<br>• 根据目标用户调整语气</div>
+                        </div>
+                      </div>
+                      <div class="ai-chat-input-row">
+                        <textarea id="pdChatInput" class="ai-chat-input" rows="2" placeholder="输入消息，例如：帮我润色产品概述部分…"></textarea>
+                        <button id="pdChatSend" class="btn primary accent" type="button">发送</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div><!-- /Tab deep -->
             </div>
           </div>
         </div>
@@ -805,86 +892,6 @@
         </div>
       </section>
 
-      <section id="productDetail" class="view">
-        <div class="product-detail">
-          <div class="product-detail-left">
-            <div class="pd-tabs">
-              <button type="button" class="btn ghost sm" id="pdBackBtn">← 返回产品档案</button>
-            </div>
-
-            <div class="pd-tab-panel active">
-              <div class="product-meta">
-                <div class="product-meta-field">
-                  <label>产品名称</label>
-                  <input type="text" id="pdName" placeholder="产品名称" />
-                </div>
-                <div class="product-meta-field">
-                  <label>类型</label>
-                  <input type="text" id="pdType" placeholder="网站 / 小程序 / SaaS / App" />
-                </div>
-                <div class="product-meta-field">
-                  <label>链接</label>
-                  <input type="url" id="pdUrl" placeholder="https://..." />
-                </div>
-                <div class="product-meta-field">
-                  <label>状态</label>
-                  <select id="pdStatus">
-                    <option value="active">active</option>
-                    <option value="draft">draft</option>
-                    <option value="paused">paused</option>
-                    <option value="archived">archived</option>
-                  </select>
-                </div>
-              </div>
-              <div class="product-meta-actions">
-                <span id="pdSaveStatus" class="pd-save-status" data-state="idle">未修改</span>
-                <button id="pdSaveBtn" class="btn primary accent" type="button">保存</button>
-                <button id="pdDeleteBtn" class="btn ghost danger" type="button">删除产品</button>
-              </div>
-              <div class="product-md-editor">
-                <div class="product-md-toolbar">
-                  <div class="product-md-toolbar-left">
-                    <button type="button" class="pd-view-btn active" data-mode="edit">编辑</button>
-                    <button type="button" class="pd-view-btn" data-mode="preview">预览</button>
-                  </div>
-                </div>
-                <textarea id="pdMarkdown" class="product-md-textarea" placeholder="在此撰写产品介绍 Markdown…&#10;&#10;## 产品概述&#10;&#10;## 核心功能&#10;&#10;## 适用场景&#10;&#10;## 优势与差异"></textarea>
-                <div id="pdPreview" class="product-md-preview preview-body" style="display:none"></div>
-              </div>
-              <div class="product-images-section">
-                <div class="panel-heading">
-                  <h3>产品图片</h3>
-                  <button id="pdUploadImageBtn" class="btn ghost sm" type="button">上传图片</button>
-                </div>
-                <div id="pdImageGallery" class="product-images"></div>
-                <div id="pdImagesEmpty" class="empty-state">
-                  <div class="empty-state-icon">🖼</div>
-                  <div class="empty-state-title">暂无产品图片</div>
-                  <p class="muted">上传产品截图或宣传图，AI 将自动生成图片描述</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="product-detail-right">
-            <div class="ai-chat-panel">
-              <div class="ai-chat-header">
-                <span class="ai-chat-header-icon">⌬</span>
-                <span>AI 助手</span>
-              </div>
-              <div id="pdChatMessages" class="ai-chat-messages">
-                <div class="ai-chat-msg assistant">
-                  <div class="ai-chat-msg-content">你好！我是 AI 助手，可以帮助你优化产品介绍。<br><br>你可以：<br>• 请我润色某段文字<br>• 补充产品亮点<br>• 优化 Markdown 排版<br>• 根据目标用户调整语气</div>
-                </div>
-              </div>
-              <div class="ai-chat-input-row">
-                <textarea id="pdChatInput" class="ai-chat-input" rows="2" placeholder="输入消息，例如：帮我润色产品概述部分…"></textarea>
-                <button id="pdChatSend" class="btn primary accent" type="button">发送</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section id="tasks" class="view">
         <div class="sub-tabs">
           <button class="sub-tab active" data-tab="task-calendar" type="button">
@@ -1020,6 +1027,15 @@
     </div>
 
     <div id="toastContainer" class="toast-container"></div>
+    <div id="fatalError" class="fatal-error" style="display:none">
+      <div class="fatal-error-card">
+        <div class="fatal-error-icon">⚠️</div>
+        <h2>数据加载失败</h2>
+        <p id="fatalErrorMsg" class="muted">无法连接后台服务。</p>
+        <p class="fatal-error-hint muted small">请确认后端已启动：<code>bash run.sh status</code></p>
+        <button id="fatalRetryBtn" class="btn primary" type="button">重试</button>
+      </div>
+    </div>
     <div id="globalLoader" class="global-loader" style="display:none">
       <div class="loader-spinner"></div>
     </div>

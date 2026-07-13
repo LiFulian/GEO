@@ -66,7 +66,7 @@ curl -X POST http://127.0.0.1:8085/api/collections/_superusers/auth-with-passwor
 - Node.js 18+（用于前端）
 
 ```bash
-git clone https://github.com/your-org/geo-studio.git
+git clone https://github.com/LiFulian/GEO.git
 cd geo-studio
 bash run.sh start
 ```
@@ -95,7 +95,7 @@ bash run.sh status   # 查看运行状态
 ### 方式二：Windows 一键启动
 
 ```cmd
-git clone https://github.com/your-org/geo-studio.git
+git clone https://github.com/LiFulian/GEO.git
 cd geo-studio
 start.bat
 ```
@@ -235,7 +235,7 @@ docker compose up -d
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-org/geo-studio.git
+git clone https://github.com/LiFulian/GEO.git
 cd geo-studio
 
 # 启动

@@ -16,6 +16,12 @@ GEO Studio 是一款开源的**生成式引擎优化（Generative Engine Optimiz
 
 > **GEO 是什么？** 随着 AI 助手（ChatGPT、智谱清言、文心一言等）成为用户新的搜索入口，让品牌/产品出现在 AI 回答中的优化就叫 GEO，也叫 AIO（AI Optimization）。
 
+## 在线 DEMO
+
+访问 **https://geo.fulianli.top** 体验完整功能（账号 `user001@geo.local`，密码 `test1234`）。
+
+> ⚠️ DEMO 站点数据公开可读，请勿填写真实 API Key 或发布敏感内容。
+
 ## 快速开始
 
 ### 前置要求
@@ -27,7 +33,7 @@ GEO Studio 是一款开源的**生成式引擎优化（Generative Engine Optimiz
 ### 一键启动
 
 ```bash
-git clone https://github.com/your-org/geo-studio.git
+git clone https://github.com/LiFulian/GEO.git
 cd geo-studio
 bash run.sh start    # macOS / Linux / WSL
 # 或

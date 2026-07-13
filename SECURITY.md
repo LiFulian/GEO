@@ -14,7 +14,7 @@
 **请勿在公开 issue 中报告安全漏洞。** 通过以下方式私密报告：
 
 - 📧 Email：**security@geo-studio.local**（占位，请替换为项目实际邮箱）
-- 🔒 GitHub Security Advisories：<https://github.com/your-org/geo-studio/security/advisories/new>
+- 🔒 GitHub Security Advisories：<https://github.com/LiFulian/GEO/security/advisories/new>
 
 ### 报告应包含
 

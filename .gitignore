@@ -28,3 +28,14 @@ pocketbase/pb_data/
 
 # Docker
 .docker/
+
+# 个人文件（本地保留，不进仓库）
+.local/
+.trae/
+.workbuddy/
+opencode.json
+SERVER_DEPLOY_GUIDE.md
+SERVER_PROJECTS.md
+
+# 临时压缩包
+*.zip

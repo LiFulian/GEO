@@ -70,6 +70,8 @@ const DEFAULT_PLATFORMS = [
 ];
 
 async function load() {
+  // 保存成功后总会触发 load()；在这里清除"未保存改动"脏标记（见 events.js 的离开保护）
+  if (typeof window.__geoClearDirty === "function") window.__geoClearDirty();
   Object.assign(state, await api("/api/bootstrap"));
   // 首次加载若平台为空，自动播种默认平台
   if (state.platforms.length === 0 && isLoggedIn()) {

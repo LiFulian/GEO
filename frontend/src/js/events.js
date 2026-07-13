@@ -43,6 +43,12 @@ function bindEvents() {
 
   $("#logoutBtn").addEventListener("click", () => {
     userLogout();
+    // 清空选中态，避免换账号登录后右侧详情残留上一账号内容
+    selectedProductId = null;
+    state.selectedArticleId = null;
+    state.selectedPlatformId = null;
+    state.product_images = [];
+    state.geo_rank_checks = [];
     state.products = []; state.geo_questions = []; state.platforms = [];
     state.articles = []; state.tasks = []; state.ai_settings = {};
     state.user_models = [];
@@ -104,6 +110,13 @@ function bindEvents() {
   // 统计卡片点击跳转
   $$(".stat-clickable").forEach(el => el.addEventListener("click", () => {
     showView(el.dataset.jump);
+    // GEO 问题没有独立入口（扁平化并入产品页），点击该卡片落到第一个产品的 GEO 区
+    if (el.dataset.scroll === "geo") {
+      setTimeout(() => {
+        const geoSection = document.querySelector(".pd-geo-section");
+        if (geoSection) geoSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 300);
+    }
   }));
 
   $("#exportBtn").addEventListener("click", async () => {
@@ -145,16 +158,22 @@ function bindEvents() {
     const userId = getCurrentUserId();
     let imported = 0, skipped = 0, errors = 0;
 
-    const importRecords = async (collection, records) => {
+    // 旧 id → 新 id 映射：导入会生成新 id，必须改写所有外键引用，否则关系全孤立
+    const idMaps = { products: new Map(), geo_questions: new Map(), platforms: new Map(), articles: new Map() };
+    const remap = (map, val) => (val ? (map.get(String(val)) || "") : "");
+
+    const importRecords = async (collection, records, { rewrite } = {}) => {
       if (!records || !Array.isArray(records)) return;
       for (const record of records) {
-        const { id, collectionId, collectionName, created_at, updated_at, created, updated, expand, ...rest } = record;
+        const { id: oldId, collectionId, collectionName, created_at, updated_at, created, updated, expand, ...rest } = record;
         rest.user_id = userId;
+        if (rewrite) rewrite(rest); // 用新 id 改写外键
         if (!rest.created_at) rest.created_at = created || new Date().toISOString();
         if (!rest.updated_at) rest.updated_at = updated || new Date().toISOString();
         try {
-          await api(`/api/${collection}`, { method: "POST", body: JSON.stringify(rest) });
+          const createdRec = await api(`/api/${collection}`, { method: "POST", body: JSON.stringify(rest) });
           imported++;
+          if (oldId && idMaps[collection]) idMaps[collection].set(String(oldId), String(createdRec.id));
         } catch (e) {
           errors++;
           console.warn(`导入 ${collection} 失败：`, record.id || record.name || record.title, e.message);
@@ -165,10 +184,22 @@ function bindEvents() {
     toast("正在导入备份...");
     try {
       await importRecords("products", backup.products);
-      await importRecords("geo_questions", backup.geo_questions);
+      await importRecords("geo_questions", backup.geo_questions, {
+        rewrite: (r) => { r.product_id = remap(idMaps.products, r.product_id); },
+      });
       await importRecords("platforms", backup.platforms);
-      await importRecords("articles", backup.articles);
-      await importRecords("publish_tasks", backup.tasks);
+      await importRecords("articles", backup.articles, {
+        rewrite: (r) => {
+          r.product_id = remap(idMaps.products, r.product_id);
+          r.geo_question_id = remap(idMaps.geo_questions, r.geo_question_id);
+        },
+      });
+      await importRecords("publish_tasks", backup.tasks, {
+        rewrite: (r) => {
+          r.article_id = remap(idMaps.articles, r.article_id);
+          r.platform_id = remap(idMaps.platforms, r.platform_id);
+        },
+      });
       await importRecords("user_models", backup.user_models);
 
       // ai_settings: 仅导入设置，不覆盖 API Key
@@ -262,11 +293,17 @@ function bindEvents() {
     } catch (e) { toast("删除失败：" + e.message, "error"); }
   });
 
-  // GEO 问题已扁平化到产品档案页面下方，无 Tab 切换
-
-  // 深度编辑跳转
+  // 深度编辑：切到产品详情面板内的「深度编辑」Tab
   $("#productGoToDetail")?.addEventListener("click", () => {
-    if (selectedProductId) showProductDetail(selectedProductId);
+    if (selectedProductId) showProductDeepTab(selectedProductId);
+  });
+
+  // 产品详情面板内的 Tab 切换
+  document.querySelectorAll("#productDetailPanel .product-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.tab;
+      if (typeof showProductTab === "function") showProductTab(tab);
+    });
   });
 
   // 生成内容快速跳转
@@ -651,7 +688,8 @@ function bindEvents() {
   $("#aiPreset").addEventListener("change", () => {
     const val = $("#aiPreset").value;
     if (val.startsWith("custom_")) {
-      applyUserModelToSettings(Number(val.replace("custom_", "")));
+      // 自定义模型 id 是 PocketBase 的 15 位字符串 id，不能用 Number() 转（会变 NaN 导致 find 永不命中）
+      applyUserModelToSettings(val.replace("custom_", ""));
       return;
     }
     const preset = aiPresets[Number(val)];
@@ -1177,6 +1215,9 @@ function bindEvents() {
   $("#taskStatProduct")?.addEventListener("change", () => { renderTaskBoardStats(); renderTaskBoard(); });
   $("#taskStatPlatform")?.addEventListener("change", () => { renderTaskBoardStats(); renderTaskBoard(); });
 
+  // 看板拖拽改状态：#taskBoard 是静态容器，内部 innerHTML 重建不影响事件委托
+  setupTaskBoardDnD();
+
   $("#articleSearch")?.addEventListener("input", debounce(renderArticles, 200));
   $("#articleFilterProduct")?.addEventListener("change", renderArticles);
   $("#articleFilterStatus")?.addEventListener("change", renderArticles);
@@ -1609,7 +1650,7 @@ async function handleDelegatedClick(e) {
   }
   if (btn.id === "productGoToDetail") {
     e.stopPropagation();
-    if (selectedProductId) showProductDetail(selectedProductId);
+    if (selectedProductId) showProductDeepTab(selectedProductId);
     return;
   }
   if (btn.id === "productGoToWorkshop") {
@@ -1617,77 +1658,6 @@ async function handleDelegatedClick(e) {
     showView("workshop");
     const wp = $("#workshopProduct");
     if (wp) wp.value = selectedProductId;
-    return;
-  }
-
-  // Product list actions (legacy)
-  if (btn.classList.contains("edit-product")) {
-    e.stopPropagation();
-    selectProduct(btn.dataset.id);
-    return;
-  }
-  if (btn.classList.contains("use-product")) {
-    e.stopPropagation();
-    showView("workshop");
-    const wp = $("#workshopProduct");
-    if (wp) wp.value = btn.dataset.id;
-    return;
-  }
-  if (btn.classList.contains("delete-product")) {
-    e.stopPropagation();
-    if (!confirm("确定删除该产品？相关数据不会删除。")) return;
-    try {
-      await api(`/api/products/${btn.dataset.id}`, { method: "DELETE" });
-      toast("产品已删除", "success");
-      resetProductForm();
-      await load();
-    } catch (e) { toast("删除失败：" + e.message, "error"); }
-    return;
-  }
-
-  // Product detail open (from product list or stat cards)
-  if (btn.classList.contains("open-product-detail")) {
-    e.stopPropagation();
-    selectProduct(btn.dataset.id);
-    return;
-  }
-  if (btn.classList.contains("open-product-geo")) {
-    e.stopPropagation();
-    showView("products");
-    selectProduct(btn.dataset.id);
-    setTimeout(() => {
-      const geoSection = document.querySelector(".pd-geo-section");
-      if (geoSection) geoSection.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 300);
-    return;
-  }
-
-  // Matrix action buttons
-  if (btn.classList.contains("matrix-generate")) {
-    e.stopPropagation();
-    const productId = btn.dataset.productId;
-    const platform = btn.dataset.platform;
-    showView("workshop");
-    if (productId) {
-      $("#workshopProduct").value = productId;
-      $("#workshopProduct").dispatchEvent(new Event("change"));
-    }
-    if (platform) {
-      // 直接遍历比较 .value，避免平台名含 "、[、] 等字符时 CSS 属性选择器失配
-      const cb = $$("#workshop .workshop-platforms input[type='checkbox']").find(el => el.value === platform);
-      if (cb) cb.checked = true;
-    }
-    return;
-  }
-
-  if (btn.classList.contains("matrix-view-content")) {
-    e.stopPropagation();
-    const productId = btn.dataset.productId;
-    const platform = btn.dataset.platform;
-    showView("workshop");
-    if (productId) $("#articleFilterProduct").value = productId;
-    if (platform) $("#articleSearch").value = platform;
-    renderArticles();
     return;
   }
 
@@ -1755,11 +1725,6 @@ async function handleDelegatedClick(e) {
     } catch (e) { toast("删除失败：" + e.message, "error"); }
     return;
   }
-  if (btn.classList.contains("edit-platform")) {
-    selectPlatform(btn.dataset.id);
-    return;
-  }
-
   // Task actions
   if (btn.classList.contains("task-status")) {
     const id = btn.dataset.id;
@@ -1862,13 +1827,15 @@ function ensurePdIdInput() {
     el = document.createElement("input");
     el.type = "hidden";
     el.id = "pdId";
-    const meta = document.querySelector("#productDetail .product-meta");
+    // 深度编辑已并入产品详情面板，挂在 deep tab 的 product-meta 容器下
+    const meta = document.querySelector("#productDetailPanel .product-detail-deep .product-meta");
     if (meta) meta.appendChild(el);
   }
   return el;
 }
 
-function showProductDetail(id) {
+// 进入产品详情面板的「深度编辑」Tab
+function showProductDeepTab(id) {
   const product = state.products.find(p => p.id === id);
   if (!product) return;
   ensurePdIdInput().value = product.id;
@@ -1877,13 +1844,14 @@ function showProductDetail(id) {
   $("#pdUrl").value = product.url || "";
   $("#pdStatus").value = product.status || "active";
   $("#pdMarkdown").value = product.description || product.markdown || "";
-  showView("productDetail");
+  // 切到深度编辑 Tab
+  if (typeof showProductTab === "function") showProductTab("deep");
+  // URL 保留为产品页 + 子路径 deep，便于分享/刷新
+  syncRoute("products", product.id, "deep");
   updateProductMdPreview();
   renderProductImages(id);
-  // 切换产品时重置保存状态
   _pdSaving = false;
   setPdSaveStatus("idle");
-  // 重置聊天消息
   const chatBox = $("#pdChatMessages");
   if (chatBox) {
     chatBox.innerHTML = "";
@@ -2704,16 +2672,129 @@ function wizardComplete() {
   showView("products");
 }
 
-// 页面加载时初始化引导
-// 仅在用户确实没有产品时显示（新用户），已有数据的用户跳过
-if (isLoggedIn() && !localStorage.getItem("geo_wizard_completed")) {
-  setTimeout(() => {
-    // 如果用户已有产品或文章，说明不是新用户，自动标记完成
-    const hasContent = (state.products || []).length > 0 || (state.articles || []).length > 0;
-    if (hasContent) {
-      localStorage.setItem("geo_wizard_completed", "true");
-    } else {
-      initWizard();
+// 新手引导：在数据加载完成后再判定是否新用户（由 app.js 的 bootstrapApp 在 load() 成功后调用）。
+// 之前用固定 setTimeout(500) 会抢在 load() 完成前判定——慢网下老用户的数据还没回来，
+// hasContent 恒为 false 也会被误弹向导。
+function maybeShowWizard() {
+  if (!isLoggedIn() || localStorage.getItem("geo_wizard_completed")) return;
+  const hasContent = (state.products || []).length > 0 || (state.articles || []).length > 0;
+  if (hasContent) {
+    localStorage.setItem("geo_wizard_completed", "true");
+  } else {
+    initWizard();
+  }
+}
+window.maybeShowWizard = maybeShowWizard;
+
+// ===== 全局通用增强：未保存改动保护 + 键盘可达性（脚本加载阶段一次性注册）=====
+
+// --- 未保存改动保护 ---
+// 在编辑表单里改动未保存时，刷新/关闭页面会弹出浏览器确认，避免误丢。
+// 脏标记在每次 load()（保存后总会触发）成功时由 state.js 清除；点取消/清空按钮也清除。
+(function setupUnsavedChangesGuard() {
+  const DIRTY_SCOPES = "#productEditMode, #platformEditMode, #geoQuestionForm, #userModelForm";
+  let dirty = false;
+  const mark = () => { dirty = true; };
+  const clear = () => { dirty = false; };
+  document.addEventListener("input", (e) => {
+    const t = e.target; if (t && t.closest && t.closest(DIRTY_SCOPES)) mark();
+  }, true);
+  document.addEventListener("change", (e) => {
+    const t = e.target; if (t && t.closest && t.closest(DIRTY_SCOPES)) mark();
+  }, true);
+  // 用户主动点取消/重置/清空 = 放弃编辑，清脏
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(
+      "#cancelProductBtn, #cancelPlatformBtn, #cancelGeoQuestionBtn, #resetGeoQuestionBtn, #resetTaskBtn, #cancelArticleBtn"
+    );
+    if (b) clear();
+  }, true);
+  window.addEventListener("beforeunload", (e) => {
+    if (dirty) { e.preventDefault(); e.returnValue = ""; }
+  });
+  window.__geoClearDirty = clear;
+})();
+
+// --- role="button" 键盘可达 ---
+// 大量卡片/列表项用 role="button" + tabindex=0 但没绑 Enter/Space，键盘/读屏用户打不开。
+// 这里在 document 上统一委托：聚焦后按 Enter/Space 触发 click。
+// 已自行处理按键并 preventDefault 的元素会被 e.defaultPrevented 跳过，避免重复触发。
+document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented) return;
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const t = e.target;
+  if (t && t.matches && t.matches('[role="button"]') && typeof t.click === "function") {
+    e.preventDefault();
+    t.click();
+  }
+});
+
+// ===== 看板拖拽（HTML5 DnD）=====
+// 把任务卡片拖到目标列即切换状态。事件委托绑定在静态 #taskBoard 上，看板 innerHTML 重建不影响。
+function setupTaskBoardDnD() {
+  const board = document.getElementById("taskBoard");
+  if (!board || board.dataset.dndBound === "1") return; // 防重复绑定
+  board.dataset.dndBound = "1";
+  let dragTaskId = null;
+
+  board.addEventListener("dragstart", (e) => {
+    const card = e.target.closest && e.target.closest(".task-row");
+    if (!card) return;
+    // 从按钮/输入框/复制菜单起拖视为普通交互，不触发拖拽
+    if (e.target.closest("button, input, select, textarea, .copy-menu")) { e.preventDefault(); return; }
+    dragTaskId = card.dataset.taskId || "";
+    card.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", dragTaskId); } catch {}
+  });
+
+  board.addEventListener("dragend", () => {
+    board.querySelectorAll(".task-row.dragging").forEach(c => c.classList.remove("dragging"));
+    board.querySelectorAll(".task-column.drag-over").forEach(c => c.classList.remove("drag-over"));
+    dragTaskId = null;
+  });
+
+  board.addEventListener("dragover", (e) => {
+    const col = e.target.closest && e.target.closest(".task-column");
+    if (col && col.dataset.dropStatus) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      board.querySelectorAll(".task-column.drag-over").forEach(c => { if (c !== col) c.classList.remove("drag-over"); });
+      col.classList.add("drag-over");
     }
-  }, 500);
+  });
+
+  board.addEventListener("dragleave", (e) => {
+    const col = e.target.closest && e.target.closest(".task-column");
+    if (col && e.relatedTarget && !col.contains(e.relatedTarget)) col.classList.remove("drag-over");
+  });
+
+  board.addEventListener("drop", async (e) => {
+    const col = e.target.closest && e.target.closest(".task-column");
+    if (!col || !col.dataset.dropStatus) return;
+    e.preventDefault();
+    col.classList.remove("drag-over");
+    const id = dragTaskId || (e.dataTransfer && e.dataTransfer.getData("text/plain")) || "";
+    const newStatus = col.dataset.dropStatus;
+    if (id && newStatus) await moveTaskToStatus(id, newStatus);
+  });
+}
+
+// 拖拽/移动任务到指定状态列
+async function moveTaskToStatus(id, newStatus) {
+  const task = state.tasks.find(t => String(t.id) === String(id));
+  if (!task || task.status === newStatus) return;
+  const body = { status: newStatus };
+  // 拖到「已发布」列且此前未发布，补发布时间（与「已发布」按钮行为一致）
+  if (newStatus === "published" && task.status !== "published" && !task.published_at) {
+    body.published_at = formatLocalNow();
+  }
+  try {
+    await api(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify(body) });
+    const labels = { todo: "待发布", published: "已发布", revise: "需修改", skipped: "已跳过" };
+    toast(`已移至「${labels[newStatus] || newStatus}」`, "success");
+    await load();
+  } catch (e) {
+    toast("移动失败：" + e.message, "error");
+  }
 }

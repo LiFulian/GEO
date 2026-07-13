@@ -46,7 +46,7 @@ jobs:
       - name: Run smoke tests
         working-directory: frontend
         run: |
-          for t in ../test_*.cjs; do
+          for t in ../tests/test_*.cjs; do
             echo "=== $t ==="
             NODE_PATH=./node_modules node "$t" || { echo "Smoke test failed: $t"; exit 1; }
           done

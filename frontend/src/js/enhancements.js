@@ -218,7 +218,11 @@ const ACHIEVEMENTS = [
   }},
 ];
 
-const unlockedAchievements = new Set(JSON.parse(localStorage.getItem("geo_achievements") || "[]"));
+// 安全读取已解锁成就（localStorage 脏数据时降级为空集，避免整模块加载阶段抛错导致 toast 全站失效）
+const unlockedAchievements = new Set((() => {
+  try { return JSON.parse(localStorage.getItem("geo_achievements") || "[]"); }
+  catch { return []; }
+})());
 
 function checkAchievements() {
   for (const ach of ACHIEVEMENTS) {
@@ -374,7 +378,9 @@ function renderDailyTip() {
 function renderAchievements() {
   const strip = $("#achievementStrip");
   if (!strip) return;
-  const unlocked = JSON.parse(localStorage.getItem("geo_achievements") || "[]");
+  let unlocked;
+  try { unlocked = JSON.parse(localStorage.getItem("geo_achievements") || "[]"); }
+  catch { unlocked = []; }
   const total = ACHIEVEMENTS.length;
   const unlockedCount = unlocked.length;
 

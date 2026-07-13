@@ -112,8 +112,11 @@ function handleRouteChange() {
     if (view === "products" && itemId) {
       if (state.products.find(p => p.id === itemId)) {
         selectProduct(itemId);
-        // 扁平化后无 Tab，subTab=geo 时滚动到 GEO 区域
-        if (subTab === "geo") {
+        // 子路径：deep 切到深度编辑 Tab，geo 滚到 GEO 区域
+        if (subTab === "deep") {
+          if (typeof showProductDeepTab === "function") showProductDeepTab(itemId);
+        } else if (subTab === "geo") {
+          if (typeof showProductTab === "function") showProductTab("geo");
           setTimeout(() => {
             const geoSection = document.querySelector(".pd-geo-section");
             if (geoSection) geoSection.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -125,6 +128,13 @@ function handleRouteChange() {
     } else if (view === "workshop" && itemId) {
       // 选中对应文章
       if (state.articles.find(a => a.id === itemId)) selectArticle(itemId);
+    } else if (view === "productDetail" && itemId) {
+      // 兼容旧链接 #productDetail/:id：切到产品页 + 深度编辑 Tab
+      if (state.products.find(p => p.id === itemId)) {
+        showView("products");
+        selectProduct(itemId);
+        if (typeof showProductDeepTab === "function") showProductDeepTab(itemId);
+      }
     }
   } finally {
     _routingGuard = false;
@@ -297,19 +307,6 @@ function renderStats() {
     todoItems.push({ icon: "👀", text: `${review} 篇内容待审核`, action: "review" });
   }
 
-  const getTodoAction = (action) => {
-    switch(action) {
-      case "coverage": return "showView(\"products\")";
-      case "drafts":
-      case "review":
-        return "showView(\"workshop\")";
-      case "tasks":
-      case "revise":
-        return "showView(\"tasks\")";
-      default: return "";
-    }
-  };
-
   $("#todoTasks").innerHTML = todoItems.length
     ? todoItems.slice(0, 6).map((item, i) => `
       <div class="list-row todo-action-item" data-action="${item.action}" style="cursor:pointer" role="button" tabindex="0">
@@ -409,7 +406,8 @@ function renderProducts() {
   // 渲染左侧产品列表
   const listItemHtml = (product) => {
     const initial = (product.name || "?").trim().charAt(0).toUpperCase();
-    const statusLabel = product.status === "active" ? "运营中" : (product.status === "draft" ? "草稿" : (product.status === "paused" ? "暂停" : "归档"));
+    const _st = product.status || "active";
+    const statusLabel = _st === "active" ? "运营中" : (_st === "draft" ? "草稿" : (_st === "paused" ? "暂停" : "归档"));
     const isActive = selectedProductId === product.id;
     return `
     <div class="product-list-item ${isActive ? "active" : ""}" data-id="${product.id}" role="button" tabindex="0">
@@ -454,9 +452,10 @@ function renderProductDetail(product) {
   // 更新状态标签
   const statusEl = $("#productDetailStatus");
   if (statusEl) {
-    const statusLabel = product.status === "active" ? "运营中" : (product.status === "draft" ? "草稿" : (product.status === "paused" ? "暂停" : "归档"));
+    const _st = product.status || "active";
+    const statusLabel = _st === "active" ? "运营中" : (_st === "draft" ? "草稿" : (_st === "paused" ? "暂停" : "归档"));
     statusEl.textContent = statusLabel;
-    statusEl.className = `product-status ${product.status || "active"}`;
+    statusEl.className = `product-status ${_st}`;
   }
 
   // 更新查看模式的字段
@@ -504,8 +503,25 @@ function renderProductDetail(product) {
   if (emptyState) emptyState.style.display = "none";
   if (detailPanel) detailPanel.style.display = "flex";
 
-  // 默认显示查看模式
+  // 同步 GEO 角标到 Tab 上
+  const tabCount = $("#productTabGeoCount");
+  if (tabCount) tabCount.textContent = qCount;
+
+  // 默认显示「基础信息」Tab + 查看模式
+  showProductTab("basic");
   showProductViewMode();
+}
+
+// 切换产品详情面板内的 Tab（basic / geo / deep）
+function showProductTab(tabName) {
+  const tabs = document.querySelectorAll("#productDetailPanel .product-tab");
+  tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === tabName));
+  const panels = document.querySelectorAll("#productDetailPanel .product-tab-panel");
+  panels.forEach(p => p.classList.toggle("active", p.dataset.panel === tabName));
+  // 切到 deep 时回滚编辑区滚动位置 + 同步预览（如果处于预览态）
+  if (tabName === "deep" && typeof window.updateProductMdPreview === "function") {
+    try { window.updateProductMdPreview(); } catch (_) {}
+  }
 }
 
 function showProductViewMode() {
@@ -516,17 +532,18 @@ function showProductViewMode() {
 }
 
 function showProductEditMode(product) {
+  showProductTab("basic");
+  const viewMode = $("#productViewMode");
+  const editMode = $("#productEditMode");
+  if (viewMode) viewMode.style.display = "none";
+  if (editMode) editMode.style.display = "";
+
   if (!product) return;
   // 隐藏空状态，显示详情面板
   const emptyState = $("#productEmptyState");
   const detailPanel = $("#productDetailPanel");
   if (emptyState) emptyState.style.display = "none";
   if (detailPanel) detailPanel.style.display = "flex";
-  // 切换到编辑模式
-  const viewMode = $("#productViewMode");
-  const editMode = $("#productEditMode");
-  if (viewMode) viewMode.style.display = "none";
-  if (editMode) editMode.style.display = "";
   // 标题显示
   const nameEl = $("#productDetailName");
   if (nameEl) nameEl.textContent = product.id ? product.name || "未命名产品" : "新建产品";
@@ -572,11 +589,6 @@ function selectProduct(id) {
   if (activeItem) activeItem.scrollIntoView({ block: "nearest", behavior: "smooth" });
   // 路由同步
   syncRoute("products", id);
-}
-
-// 扁平化后不再有 Tab 切换，保留空函数避免外部调用报错
-function showProductTab(_tabName) {
-  // no-op: GEO 问题已与档案同页
 }
 
 function resetProductForm() {
@@ -1063,6 +1075,22 @@ function renderPreview() {
 
 // 当前选中的平台ID（与 state.selectedPlatformId 保持同步，本地用于渲染高亮）
 
+// 平台分类固定顺序（按内容属性自然排序），未知/未分类排最后
+const PLATFORM_CATEGORY_ORDER = ["综合资讯", "社区社交", "视频平台", "技术社区", "海外平台"];
+// 分级：status 优先级（数字越小越靠前）
+const PLATFORM_TIER_ORDER = { enabled: 0, watch: 1, paused: 2 };
+const PLATFORM_TIER_LABEL = { enabled: "启用", watch: "观察", paused: "暂停" };
+
+// 平台分组折叠状态（localStorage 记忆）
+const PLATFORM_GROUPS_STORAGE_KEY = "geo.platformGroupsCollapsed";
+function getCollapsedGroups() {
+  try { return new Set(JSON.parse(localStorage.getItem(PLATFORM_GROUPS_STORAGE_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+function saveCollapsedGroups(set) {
+  try { localStorage.setItem(PLATFORM_GROUPS_STORAGE_KEY, JSON.stringify([...set])); } catch {}
+}
+
 function renderPlatforms() {
   const query = ($("#platformSearch")?.value || "").trim().toLowerCase();
   const list = state.platforms.filter(p => {
@@ -1070,19 +1098,43 @@ function renderPlatforms() {
     return !query || text.includes(query);
   });
 
+  // 按分类分组
+  const groups = new Map();
+  for (const p of list) {
+    const cat = (p.category || "").trim() || "未分类";
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(p);
+  }
+  // 分类按固定顺序排
+  const orderedGroups = [...groups.entries()].sort(([a], [b]) => {
+    const ia = PLATFORM_CATEGORY_ORDER.indexOf(a);
+    const ib = PLATFORM_CATEGORY_ORDER.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+  // 组内按分级排：启用 > 观察 > 暂停
+  for (const [, items] of orderedGroups) {
+    items.sort((a, b) => (PLATFORM_TIER_ORDER[a.status] ?? 9) - (PLATFORM_TIER_ORDER[b.status] ?? 9));
+  }
+
   // 左侧列表项
   const listItemHtml = (platform) => {
     const initial = (platform.name || "?").trim().charAt(0).toUpperCase();
     const isEnabled = platform.status === "enabled";
-    const statusLabel = isEnabled ? "启用" : (platform.status === "watch" ? "观察" : "暂停");
+    const tier = PLATFORM_TIER_ORDER[platform.status] != null ? platform.status : "paused";
+    const tierLabel = PLATFORM_TIER_LABEL[tier];
+    const fitMap = { high: "高适配", medium: "中适配", low: "低适配" };
     const isActive = state.selectedPlatformId === platform.id;
     return `
     <div class="platform-list-item ${isActive ? "active" : ""}" data-id="${platform.id}" role="button" tabindex="0">
       <div class="platform-list-avatar ${isEnabled ? "" : "off"}">${escapeHtml(initial)}</div>
       <div class="platform-list-info">
         <div class="platform-list-name">${escapeHtml(platform.name)}</div>
-        <div class="platform-list-meta">${escapeHtml(platform.category || "未分类")} · ${statusLabel}</div>
+        <div class="platform-list-meta">${escapeHtml(fitMap[platform.soft_article_fit] || "适配度未填")}</div>
       </div>
+      <span class="platform-tier ${tier}">${tierLabel}</span>
     </div>`;
   };
 
@@ -1090,7 +1142,19 @@ function renderPlatforms() {
     ? (state.platforms.length
       ? `<div class="search-empty">没有找到匹配的平台</div>`
       : `<div class="empty-state"><p class="empty-state-title">还没有平台档案</p></div>`)
-    : list.map(listItemHtml).join("");
+    : (() => {
+        const collapsed = getCollapsedGroups();
+        return orderedGroups.map(([cat, items]) => `
+          <div class="platform-group ${collapsed.has(cat) ? "collapsed" : ""}" data-cat="${escapeHtml(cat)}">
+            <div class="platform-group-header" role="button" tabindex="0" aria-expanded="${!collapsed.has(cat)}">
+              <span class="platform-group-chevron" aria-hidden="true">▾</span>
+              <span class="platform-group-title">${escapeHtml(cat)}</span>
+              <span class="platform-group-count">${items.length}</span>
+            </div>
+            <div class="platform-group-items">${items.map(listItemHtml).join("")}</div>
+          </div>
+        `).join("");
+      })();
 
   const listEl = $("#platformList");
   if (listEl) listEl.innerHTML = listHtml;
@@ -1104,6 +1168,23 @@ function renderPlatforms() {
     listEl.querySelectorAll(".platform-list-item").forEach(el => {
       el.addEventListener("click", () => {
         selectPlatform(el.dataset.id);
+      });
+    });
+    // 分组头折叠/展开
+    const collapsedSet = getCollapsedGroups();
+    listEl.querySelectorAll(".platform-group-header").forEach(header => {
+      const toggle = () => {
+        const group = header.closest(".platform-group");
+        const cat = group.dataset.cat;
+        const isCollapsed = group.classList.toggle("collapsed");
+        header.setAttribute("aria-expanded", String(!isCollapsed));
+        if (isCollapsed) collapsedSet.add(cat);
+        else collapsedSet.delete(cat);
+        saveCollapsedGroups(collapsedSet);
+      };
+      header.addEventListener("click", toggle);
+      header.addEventListener("keydown", e => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
       });
     });
   }
@@ -1425,11 +1506,14 @@ function getFilteredTasks(useStatFilters = false) {
 }
 
 function renderTaskBoard() {
-  // 用户正在看板内交互（如往 publishedUrl- 输入粘贴链接）时，跳过本次重建，
-  // 避免清空正在输入的内容；下一次无焦点的 load 会正常刷新
+  // 用户正在看板内的输入框/文本域里打字（如粘贴发布链接）时，跳过本次重建，
+  // 避免清空正在输入的内容；下一次无焦点的 load 会正常刷新。
+  // 注意：守卫只针对 INPUT/TEXTAREA——点击按钮（状态切换/删除）后按钮虽获得焦点，
+  // 但仍应允许刷新，否则改状态/删任务后 UI 假性"没反应"。
   const board = $("#taskBoard");
   if (!board) return;
-  if (board.contains(document.activeElement)) return;
+  const ae = document.activeElement;
+  if (ae && board.contains(ae) && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
   const groups = ["todo", "published", "revise", "skipped"];
   const labels = { todo: "待发布", published: "已发布", revise: "需修改", skipped: "已跳过" };
   const tasks = getFilteredTasks(true);
@@ -1437,7 +1521,7 @@ function renderTaskBoard() {
   board.innerHTML = groups.map(status => {
     const groupTasks = tasks.filter(task => task.status === status);
     return `
-    <div class="task-column">
+    <div class="task-column" data-drop-status="${status}">
       <h3>${labels[status]}</h3>
       ${groupTasks.map(task => taskRow(task)).join("") || `<p class="muted">${hasResults ? "空" : "没有匹配的任务"}</p>`}
     </div>`;
@@ -1510,7 +1594,7 @@ function taskRow(task) {
     }
   }
   return `
-    <article class="task-row ${isPublished ? 'published' : ''}">
+    <article class="task-row ${isPublished ? 'published' : ''}" draggable="true" data-task-id="${task.id}">
       <h3>${escapeHtml(task.article_title)}</h3>
       ${metaParts.length ? `<p class="muted">${metaParts.join(" · ")}</p>` : ""}
       ${task.platform_login_notes ? `<p class="hint compact-hint">${escapeHtml(task.platform_login_notes)}</p>` : ""}
