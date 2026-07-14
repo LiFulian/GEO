@@ -44,14 +44,6 @@ start.bat            # Windows
 
 打开 **http://localhost:5175** 即可使用。
 
-### Docker 部署
-
-```bash
-docker compose up -d
-```
-
-打开 http://localhost:8085 即可（Docker 模式下前端由 PocketBase 同源托管）。详见 [Dockerfile](Dockerfile) 与 [docker-compose.yml](docker-compose.yml)。
-
 ### 默认账号
 
 | 角色 | 邮箱 | 密码 | 入口 |
@@ -162,7 +154,7 @@ bash run.sh status   # 查看运行状态
 - [x] 发布平台矩阵 + 任务看板 + 日历视图
 - [x] 多用户隔离 + JWT 认证
 - [x] 暗色模式 + 全局搜索 + 成就系统
-- [x] Hash 路由 + Docker 化部署 + CI
+- [x] Hash 路由 + CI
 - [ ] 团队协作（共享产品档案、协作编辑）
 - [ ] 内容效果分析（接入 AI 助手引用监测）
 - [ ] 更多 AI 模型预设（Claude、Gemini）

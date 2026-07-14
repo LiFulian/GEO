@@ -26,9 +26,6 @@ pocketbase/pb_data/
 # Runtime
 .run/
 
-# Docker
-.docker/
-
 # 个人文件（本地保留，不进仓库）
 .local/
 .trae/

@@ -1,5 +1,0 @@
-# Docker 构建缓存
-.docker/
-
-# PocketBase 运行时数据（Docker volume 挂载用）
-# 注意：docker-compose.yml 已通过 volume 挂载，这里仅排除开发时的 pb_data

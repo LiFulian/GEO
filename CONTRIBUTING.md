@@ -48,8 +48,6 @@ geo-studio/
 │   └── package.json
 ├── pocketbase/              # 后端
 │   └── pb_migrations/       # 数据库迁移（12 个集合）
-├── Dockerfile
-├── docker-compose.yml
 ├── run.sh                   # 一键启动（macOS/Linux）
 ├── start.bat                # 一键启动（Windows）
 └── README.md
@@ -225,7 +223,7 @@ migrate(
 1. **复现步骤**：具体操作流程
 2. **预期行为**：应该是什么
 3. **实际行为**：实际发生了什么
-4. **环境**：浏览器、操作系统、是否 Docker 部署
+4. **环境**：浏览器、操作系统
 5. **截图**：如有
 
 ## 提议新功能

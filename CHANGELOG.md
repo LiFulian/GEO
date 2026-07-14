@@ -34,9 +34,8 @@
 - 暗色模式 + 全局搜索（⌘K）+ 成就系统 + 每日写作灵感 + 内容质量评分
 - Hash 路由（URL 可分享、可刷新）
 - 一键启动脚本（mac/Linux/Windows）
-- Docker 化部署
 - CI（GitHub Actions）：冒烟测试 + 构建校验
-- Dependabot：npm + GitHub Actions + Docker 周/月更
+- Dependabot：npm + GitHub Actions 周更
 - Issue 模板（Bug / Feature）、PR 模板、Code of Conduct、Security Policy
 
 ### Security
