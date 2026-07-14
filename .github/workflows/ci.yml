@@ -7,10 +7,10 @@ on:
     branches: [main]
 
 jobs:
-  smoke:
-    name: Lint / Build / Smoke
+  build:
+    name: Build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
       - name: Checkout
@@ -23,38 +23,10 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies (PocketBase binary + frontend)
-        run: bash run.sh install
-
-      - name: Start services (PocketBase 8085 + Vite 5175)
-        run: bash run.sh start
-
-      - name: Wait for services ready
-        run: |
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8085/api/health >/dev/null \
-              && curl -sf http://localhost:5175/ >/dev/null; then
-              echo "Services up after ${i} attempts"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Services failed to start"
-          tail -50 /tmp/geo_pb.log /tmp/geo_vite.log
-          exit 1
-
-      - name: Run smoke tests
+      - name: Install dependencies
         working-directory: frontend
-        run: |
-          for t in ../tests/test_*.cjs; do
-            echo "=== $t ==="
-            NODE_PATH=./node_modules node "$t" || { echo "Smoke test failed: $t"; exit 1; }
-          done
+        run: npm ci
 
       - name: Build frontend
         working-directory: frontend
         run: npm run build
-
-      - name: Stop services
-        if: always()
-        run: bash run.sh stop

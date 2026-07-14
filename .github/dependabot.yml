@@ -14,9 +14,6 @@ updates:
         patterns:
           - "vite"
           - "@vitejs/*"
-      playwright:
-        patterns:
-          - "playwright"
 
   - package-ecosystem: "github-actions"
     directory: "/"
