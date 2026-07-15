@@ -6,6 +6,5 @@ frontend/dist/
 # PocketBase binary（不纳入版本管理，由 run.sh 自动下载）
 pocketbase/pocketbase
 pocketbase/pocketbase.exe
-# PocketBase 运行时数据（用户数据库）
-pocketbase/pb_data/
+# 注：pocketbase/pb_data/ 已纳入版本，便于跨设备同步业务数据
 
