@@ -1,7 +1,3 @@
-# Environment
-.env
-.env.local
-.env.*.local
 
 # Dependencies
 frontend/node_modules/
@@ -13,26 +9,3 @@ pocketbase/pocketbase.exe
 # PocketBase 运行时数据（用户数据库）
 pocketbase/pb_data/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-
-# Logs
-*.log
-
-# Runtime
-.run/
-
-# 个人文件（本地保留，不进仓库）
-.local/
-.trae/
-.workbuddy/
-opencode.json
-SERVER_DEPLOY_GUIDE.md
-SERVER_PROJECTS.md
-
-# 临时压缩包
-*.zip
