@@ -31,6 +31,11 @@ pocketbase/
 ├── pb_hooks/           Go hooks（ai_proxy.js：AI 反代）
 └── pb_migrations/      迁移脚本（仅追加）
 ```
+## 默认ai
+https://docs.bigmodel.cn/cn/guide/models/free/glm-4.7-flash
+https://docs.bigmodel.cn/cn/guide/models/free/glm-4.6v-flash
+https://docs.bigmodel.cn/cn/guide/models/free/glm-4-flash-250414
+apikey：2b954231cd31454ea6e1e044970c96e6.vU4RfVaGkyCKm7D7
 
 ## 数据模型
 

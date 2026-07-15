@@ -1,21 +1,22 @@
 {
   "name": "geo-studio-frontend",
-  "version": "0.1.0",
-  "description": "GEO Studio 前端 - 原生 JS + Vite，无框架",
+  "version": "0.2.0",
+  "description": "GEO Studio 前端 - Vue 3 + TypeScript + Element Plus",
   "private": true,
   "type": "module",
-  "main": "index.html",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit"
   },
   "keywords": [
     "geo",
     "ai-optimization",
     "generative-engine-optimization",
     "pocketbase",
-    "vite",
+    "vue",
+    "element-plus",
     "content-marketing"
   ],
   "author": "GEO Studio Contributors",
@@ -32,7 +33,17 @@
     "url": "https://github.com/LiFulian/GEO/issues"
   },
   "homepage": "https://github.com/LiFulian/GEO#readme",
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "element-plus": "^2.8.8",
+    "pinia": "^2.2.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.4.5"
+  },
   "devDependencies": {
-    "vite": "^6.4.3"
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.4.3",
+    "vue-tsc": "^2.1.10"
   }
 }
